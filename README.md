@@ -196,9 +196,43 @@ flake8 src/
 
 ## 🚀 Deployment
 
-### Railway (PaaS - Recommended)
+### Vercel (Serverless - Recommended)
 
-Railway provides free tier and automatic deployments:
+Vercel provides free tier and automatic deployments for serverless functions:
+
+1. **Install Vercel CLI:**
+   ```bash
+   npm install -g vercel
+   ```
+
+2. **Deploy to Vercel:**
+   ```bash
+   cd telegram-affiliate-publisher
+   vercel --prod
+   ```
+
+3. **Set Environment Variables in Vercel Dashboard:**
+   ```
+   DATABASE_URL=postgresql://... (use Vercel Postgres or external DB)
+   TELEGRAM_BOT_TOKEN=your_bot_token
+   AMAZON_ACCESS_KEY=your_amazon_key
+   AMAZON_SECRET_KEY=your_amazon_secret
+   AMAZON_ASSOCIATE_TAG=your_associate_tag
+   ADMIN_USERNAME=your_admin_username
+   ADMIN_PASSWORD=your_secure_password
+   ```
+
+4. **Automatic Deployment**
+   - Vercel will build and deploy automatically
+   - Your app will be available at `https://your-app.vercel.app`
+
+5. **Set Up Daily Automation**
+   - Use UptimeRobot or similar service
+   - Configure daily POST request to: `https://your-app.vercel.app/api/v1/run-daily`
+
+### Railway (Alternative)
+
+If you prefer Railway over Vercel:
 
 1. **Connect GitHub Repository**
    - Push code to GitHub
@@ -206,7 +240,7 @@ Railway provides free tier and automatic deployments:
 
 2. **Set Environment Variables in Railway Dashboard:**
    ```
-   DATABASE_URL=postgresql://... (provided by Railway)
+   DATABASE_URL=postgresql://... (Railway предоставит)
    TELEGRAM_BOT_TOKEN=your_bot_token
    AMAZON_ACCESS_KEY=your_amazon_key
    AMAZON_SECRET_KEY=your_amazon_secret
@@ -218,10 +252,6 @@ Railway provides free tier and automatic deployments:
 3. **Automatic Deployment**
    - Railway will build and deploy automatically
    - Your app will be available at `https://your-app.railway.app`
-
-4. **Set Up Daily Automation**
-   - Use UptimeRobot or similar service
-   - Configure daily POST request to: `https://your-app.railway.app/api/v1/run-daily`
 
 ### Docker Production
 
