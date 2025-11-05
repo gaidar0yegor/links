@@ -111,6 +111,9 @@ async def root():
 @app.post("/channels", response_model=ChannelResponse)
 async def create_channel(request: ChannelCreateRequest):
     """Создать новый канал."""
+    if not channel_repo:
+        raise HTTPException(status_code=503, detail="Service not configured - missing DATABASE_URL")
+
     channel = Channel(
         name=request.name,
         telegram_chat_id=request.telegram_chat_id,
@@ -125,6 +128,9 @@ async def create_channel(request: ChannelCreateRequest):
 @app.get("/channels", response_model=List[ChannelResponse])
 async def get_channels():
     """Получить список всех активных каналов."""
+    if not channel_repo:
+        raise HTTPException(status_code=503, detail="Service not configured - missing DATABASE_URL")
+
     channels = await channel_repo.get_all_active()
     return [ChannelResponse(**channel.__dict__) for channel in channels]
 
@@ -132,6 +138,9 @@ async def get_channels():
 @app.get("/channels/{channel_id}", response_model=ChannelResponse)
 async def get_channel(channel_id: int):
     """Получить канал по ID."""
+    if not channel_repo:
+        raise HTTPException(status_code=503, detail="Service not configured - missing DATABASE_URL")
+
     channel = await channel_repo.get_by_id(channel_id)
     if not channel:
         raise HTTPException(status_code=404, detail="Channel not found")
@@ -280,11 +289,16 @@ async def run_daily_cycle():
     return {"message": "Daily cycle started", "status": "running"}
 
 
-# Health check
+# Health check - simplified for Railway deployment
 @app.get("/health")
 async def health_check():
-    """Health check endpoint."""
-    return {"status": "healthy", "timestamp": datetime.utcnow()}
+    """Health check endpoint - works without database connection."""
+    return {
+        "status": "healthy",
+        "timestamp": datetime.utcnow().isoformat(),
+        "version": "1.0.0",
+        "service": "telegram-affiliate-publisher"
+    }
 
 
 if __name__ == "__main__":
