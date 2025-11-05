@@ -47,19 +47,70 @@ def authenticate(credentials: HTTPBasicCredentials = Depends(security)):
         )
     return credentials.username
 
-# Dependency injection - in real app these would be injected via DI container
-channel_repo: IChannelRepository = None
-settings_repo: ISettingsRepository = None
-product_repo: IProductRepository = None
-publication_repo: IPublicationRepository = None
-partner_api: IPartnerApi = None
-telegram_publisher: ITelegramPublisher = None
-ai_rewriter: IAiRewriter = None
+# Lazy initialization - dependencies are created only when needed
+def get_channel_repo() -> IChannelRepository:
+    """Lazy initialization of channel repository."""
+    if not hasattr(get_channel_repo, '_instance'):
+        # For Vercel/serverless, use a simple approach
+        # In production, this would use proper DI container
+        get_channel_repo._instance = None  # Placeholder
+    return get_channel_repo._instance
 
-# Use cases
-collect_use_case: CollectAndFilterProductsUseCase = None
-affiliate_use_case: GenerateAffiliateLinksUseCase = None
-publish_use_case: GenerateContentAndPublishUseCase = None
+def get_settings_repo() -> ISettingsRepository:
+    """Lazy initialization of settings repository."""
+    if not hasattr(get_settings_repo, '_instance'):
+        get_settings_repo._instance = None  # Placeholder
+    return get_settings_repo._instance
+
+def get_product_repo() -> IProductRepository:
+    """Lazy initialization of product repository."""
+    if not hasattr(get_product_repo, '_instance'):
+        get_product_repo._instance = None  # Placeholder
+    return get_product_repo._instance
+
+def get_publication_repo() -> IPublicationRepository:
+    """Lazy initialization of publication repository."""
+    if not hasattr(get_publication_repo, '_instance'):
+        get_publication_repo._instance = None  # Placeholder
+    return get_publication_repo._instance
+
+def get_partner_api() -> IPartnerApi:
+    """Lazy initialization of partner API."""
+    if not hasattr(get_partner_api, '_instance'):
+        get_partner_api._instance = None  # Placeholder
+    return get_partner_api._instance
+
+def get_telegram_publisher() -> ITelegramPublisher:
+    """Lazy initialization of Telegram publisher."""
+    if not hasattr(get_telegram_publisher, '_instance'):
+        get_telegram_publisher._instance = None  # Placeholder
+    return get_telegram_publisher._instance
+
+def get_ai_rewriter() -> IAiRewriter:
+    """Lazy initialization of AI rewriter."""
+    if not hasattr(get_ai_rewriter, '_instance'):
+        # Use rule-based generator as default (free)
+        get_ai_rewriter._instance = RuleBasedContentGenerator()
+    return get_ai_rewriter._instance
+
+# Use cases - lazy initialization
+def get_collect_use_case() -> CollectAndFilterProductsUseCase:
+    """Lazy initialization of collect use case."""
+    if not hasattr(get_collect_use_case, '_instance'):
+        get_collect_use_case._instance = None  # Placeholder
+    return get_collect_use_case._instance
+
+def get_affiliate_use_case() -> GenerateAffiliateLinksUseCase:
+    """Lazy initialization of affiliate use case."""
+    if not hasattr(get_affiliate_use_case, '_instance'):
+        get_affiliate_use_case._instance = None  # Placeholder
+    return get_affiliate_use_case._instance
+
+def get_publish_use_case() -> GenerateContentAndPublishUseCase:
+    """Lazy initialization of publish use case."""
+    if not hasattr(get_publish_use_case, '_instance'):
+        get_publish_use_case._instance = None  # Placeholder
+    return get_publish_use_case._instance
 
 
 # Pydantic models for API
@@ -111,6 +162,7 @@ async def root():
 @app.post("/channels", response_model=ChannelResponse)
 async def create_channel(request: ChannelCreateRequest):
     """Создать новый канал."""
+    channel_repo = get_channel_repo()
     if not channel_repo:
         raise HTTPException(status_code=503, detail="Service not configured - missing DATABASE_URL")
 
@@ -128,6 +180,7 @@ async def create_channel(request: ChannelCreateRequest):
 @app.get("/channels", response_model=List[ChannelResponse])
 async def get_channels():
     """Получить список всех активных каналов."""
+    channel_repo = get_channel_repo()
     if not channel_repo:
         raise HTTPException(status_code=503, detail="Service not configured - missing DATABASE_URL")
 
@@ -138,6 +191,7 @@ async def get_channels():
 @app.get("/channels/{channel_id}", response_model=ChannelResponse)
 async def get_channel(channel_id: int):
     """Получить канал по ID."""
+    channel_repo = get_channel_repo()
     if not channel_repo:
         raise HTTPException(status_code=503, detail="Service not configured - missing DATABASE_URL")
 
@@ -151,6 +205,12 @@ async def get_channel(channel_id: int):
 @app.post("/channels/{channel_id}/settings", response_model=ChannelSettingsResponse)
 async def create_channel_settings(channel_id: int, request: ChannelSettingsRequest):
     """Создать настройки для канала."""
+    channel_repo = get_channel_repo()
+    settings_repo = get_settings_repo()
+
+    if not channel_repo or not settings_repo:
+        raise HTTPException(status_code=503, detail="Service not configured - missing DATABASE_URL")
+
     # Verify channel exists
     channel = await channel_repo.get_by_id(channel_id)
     if not channel:
@@ -172,6 +232,10 @@ async def create_channel_settings(channel_id: int, request: ChannelSettingsReque
 @app.get("/channels/{channel_id}/settings", response_model=ChannelSettingsResponse)
 async def get_channel_settings(channel_id: int):
     """Получить настройки канала."""
+    settings_repo = get_settings_repo()
+    if not settings_repo:
+        raise HTTPException(status_code=503, detail="Service not configured - missing DATABASE_URL")
+
     settings = await settings_repo.get_by_channel_id(channel_id)
     if not settings:
         raise HTTPException(status_code=404, detail="Settings not found")
@@ -182,6 +246,10 @@ async def get_channel_settings(channel_id: int):
 @app.post("/processes/collect-products")
 async def trigger_collect_products(background_tasks: BackgroundTasks):
     """Запустить процесс сбора и фильтрации товаров для всех каналов."""
+    collect_use_case = get_collect_use_case()
+    if not collect_use_case:
+        raise HTTPException(status_code=503, detail="Service not configured - missing dependencies")
+
     background_tasks.add_task(collect_use_case.execute)
     return {"message": "Product collection process started", "status": "running"}
 
@@ -189,6 +257,10 @@ async def trigger_collect_products(background_tasks: BackgroundTasks):
 @app.post("/processes/generate-links/{channel_id}")
 async def trigger_generate_links(channel_id: int, background_tasks: BackgroundTasks):
     """Запустить процесс генерации партнерских ссылок для канала."""
+    affiliate_use_case = get_affiliate_use_case()
+    if not affiliate_use_case:
+        raise HTTPException(status_code=503, detail="Service not configured - missing dependencies")
+
     background_tasks.add_task(affiliate_use_case.execute, channel_id)
     return {"message": f"Affiliate link generation started for channel {channel_id}", "status": "running"}
 
@@ -196,6 +268,10 @@ async def trigger_generate_links(channel_id: int, background_tasks: BackgroundTa
 @app.post("/processes/publish-content/{channel_id}")
 async def trigger_publish_content(channel_id: int, background_tasks: BackgroundTasks):
     """Запустить процесс формирования контента и публикации для канала."""
+    publish_use_case = get_publish_use_case()
+    if not publish_use_case:
+        raise HTTPException(status_code=503, detail="Service not configured - missing dependencies")
+
     background_tasks.add_task(publish_use_case.execute, channel_id)
     return {"message": f"Content generation and publishing started for channel {channel_id}", "status": "running"}
 
@@ -211,6 +287,14 @@ async def run_full_cycle(background_tasks: BackgroundTasks):
 async def run_full_cycle_background():
     """Background task for full cycle execution."""
     try:
+        collect_use_case = get_collect_use_case()
+        affiliate_use_case = get_affiliate_use_case()
+        publish_use_case = get_publish_use_case()
+
+        if not collect_use_case or not affiliate_use_case or not publish_use_case:
+            print("Error: Services not configured - missing dependencies")
+            return
+
         # 1. Collect and filter products
         collect_results = await collect_use_case.execute()
         print(f"Collection completed: {collect_results}")
@@ -235,6 +319,16 @@ async def run_full_cycle_background():
 @app.get("/admin/dashboard", dependencies=[Depends(authenticate)])
 async def admin_dashboard():
     """Admin dashboard with system status."""
+    channel_repo = get_channel_repo()
+    if not channel_repo:
+        return {
+            "total_channels": 0,
+            "active_channels": 0,
+            "last_run": datetime.utcnow(),
+            "status": "not_configured",
+            "message": "Database not configured - missing DATABASE_URL"
+        }
+
     channels = await channel_repo.get_all_active()
     total_channels = len(channels)
 
@@ -252,6 +346,10 @@ async def admin_dashboard():
 @app.get("/admin/publications/{channel_id}", dependencies=[Depends(authenticate)])
 async def get_channel_publications(channel_id: int):
     """Get publication history for a channel."""
+    publication_repo = get_publication_repo()
+    if not publication_repo:
+        raise HTTPException(status_code=503, detail="Service not configured - missing DATABASE_URL")
+
     publications = await publication_repo.get_recent_by_channel(channel_id, limit=20)
     return {
         "channel_id": channel_id,
