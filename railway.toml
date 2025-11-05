@@ -1,0 +1,14 @@
+[build]
+builder = "dockerfile"
+
+[deploy]
+healthcheckPath = "/health"
+healthcheckTimeout = 300
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
+
+[environments.production.variables]
+APP_ENV = "production"
+LOG_LEVEL = "INFO"
+# Database URL will be provided by Railway
+# API keys should be set in Railway secrets
