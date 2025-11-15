@@ -36,7 +36,7 @@ class AmazonConfig:
     associate_tag: str = os.getenv("AMAZON_ASSOCIATE_TAG")
     region: str = os.getenv("AMAZON_REGION", "eu-west-1")
     marketplace: str = os.getenv("AMAZON_MARKETPLACE", "amazon.it")
-    use_api: str = os.getenv("AMAZON_USE_API", "true")
+    use_api: bool = os.getenv("AMAZON_USE_API", "true").lower() in ("true", "1", "yes", "on")
 
 @dataclass
 class LLMConfig:

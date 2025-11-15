@@ -1,15 +1,31 @@
 # services/amazon_paapi_client.py
-import aiohttp
-import hashlib
-import hmac
-import json
-from datetime import datetime
+import asyncio
 from typing import Dict, Any, Optional
 from config import conf
 from services.logger import bot_logger
 
+try:
+    from amazon.paapi import AmazonAPI
+    PAAPI_AVAILABLE = "amazon_paapi"
+    print("DEBUG: amazon.paapi imported successfully")
+except ImportError as e:
+    print(f"DEBUG: amazon.paapi import failed: {e}")
+    try:
+        from paapi5_python_sdk.api.default_api import DefaultApi
+        from paapi5_python_sdk.models.partner_type import PartnerType
+        from paapi5_python_sdk.models.search_items_request import SearchItemsRequest
+        from paapi5_python_sdk.models.search_items_resource import SearchItemsResource
+        from paapi5_python_sdk.rest import ApiException
+        PAAPI_AVAILABLE = "paapi5_python_sdk"
+        print("DEBUG: paapi5_python_sdk imported successfully")
+    except ImportError as e2:
+        print(f"DEBUG: paapi5_python_sdk import failed: {e2}")
+        PAAPI_AVAILABLE = False
+        bot_logger.log_error("AmazonPAAPIClient", Exception("PAAPI5 SDK not available"), "Using fallback methods")
+
+
 class AmazonPAAPIClient:
-    """Асинхронный клиент для Amazon Product Advertising API 5.0 с AWS Signature V4."""
+    """Amazon Product Advertising API 5.0 client with PAAPI5 SDK."""
 
     def __init__(self):
         self.access_key = conf.amazon.access_key
@@ -17,208 +33,325 @@ class AmazonPAAPIClient:
         self.associate_tag = conf.amazon.associate_tag
         self.region = conf.amazon.region
         self.marketplace = conf.amazon.marketplace
-        self.service = "ProductAdvertisingAPI"
-        self.host = "webservices.amazon.com"
-        self.endpoint = f"https://{self.host}/paapi5/searchitems"
+        self.host = "webservices.amazon.it"  # Host for Italy
 
-        # Check if Amazon API is disabled (for Google Sheets-only mode)
+        # Check if Amazon API is enabled
         self.use_amazon_api = getattr(conf.amazon, 'use_api', True)
         if isinstance(self.use_amazon_api, str):
             self.use_amazon_api = self.use_amazon_api.lower() in ('true', '1', 'yes', 'on')
+        elif isinstance(self.use_amazon_api, bool):
+            self.use_amazon_api = self.use_amazon_api
+        else:
+            self.use_amazon_api = False  # Default to False for safety
 
-        # Инициализируем aiohttp сессию
-        self.session: Optional[aiohttp.ClientSession] = None
-
-    async def __aenter__(self):
-        """Async context manager entry."""
-        self.session = aiohttp.ClientSession()
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """Async context manager exit."""
-        if self.session:
-            await self.session.close()
-
-    def _get_signature_key(self, key: str, date_stamp: str, region_name: str, service_name: str) -> bytes:
-        """Генерирует ключ для подписи по алгоритму AWS Signature Version 4."""
-        k_date = hmac.new(f"AWS4{key}".encode('utf-8'), date_stamp.encode('utf-8'), hashlib.sha256).digest()
-        k_region = hmac.new(k_date, region_name.encode('utf-8'), hashlib.sha256).digest()
-        k_service = hmac.new(k_region, service_name.encode('utf-8'), hashlib.sha256).digest()
-        k_signing = hmac.new(k_service, "aws4_request".encode('utf-8'), hashlib.sha256).digest()
-        return k_signing
-
-    def _sign_request(self, payload: str, amz_date: str, date_stamp: str) -> str:
-        """Создает подпись для запроса по алгоритму AWS Signature Version 4."""
-
-        # 1. Создаем canonical request
-        canonical_uri = "/paapi5/searchitems"
-        canonical_querystring = ""
-        canonical_headers = f"host:{self.host}\nx-amz-date:{amz_date}\n"
-        signed_headers = "host;x-amz-date"
-        payload_hash = hashlib.sha256(payload.encode('utf-8')).hexdigest()
-
-        canonical_request = "\n".join([
-            "POST",
-            canonical_uri,
-            canonical_querystring,
-            canonical_headers,
-            signed_headers,
-            payload_hash
-        ])
-
-        # 2. Создаем string to sign
-        algorithm = "AWS4-HMAC-SHA256"
-        credential_scope = f"{date_stamp}/{self.region}/{self.service}/aws4_request"
-        canonical_request_hash = hashlib.sha256(canonical_request.encode('utf-8')).hexdigest()
-
-        string_to_sign = "\n".join([
-            algorithm,
-            amz_date,
-            credential_scope,
-            canonical_request_hash
-        ])
-
-        # 3. Вычисляем подпись
-        signing_key = self._get_signature_key(self.secret_key, date_stamp, self.region, self.service)
-        signature = hmac.new(signing_key, string_to_sign.encode('utf-8'), hashlib.sha256).hexdigest()
-
-        # 4. Создаем заголовок Authorization
-        authorization_header = (
-            f"{algorithm} Credential={self.access_key}/{credential_scope}, "
-            f"SignedHeaders={signed_headers}, Signature={signature}"
-        )
-
-        return authorization_header
+        # Initialize API client if SDK is available
+        self.api_client = None
+        if PAAPI_AVAILABLE and self.use_amazon_api:
+            try:
+                if PAAPI_AVAILABLE == "amazon_paapi":
+                    # Use amazon.paapi package
+                    print(f"DEBUG: Initializing AmazonAPI with access_key={self.access_key[:10]}..., partner_tag={self.associate_tag}")
+                    self.api_client = AmazonAPI(
+                        access_key=self.access_key,
+                        secret_key=self.secret_key,
+                        partner_tag=self.associate_tag,
+                        country='IT'  # Italy
+                    )
+                    print("DEBUG: AmazonAPI initialized successfully")
+                else:
+                    # Use paapi5_python_sdk
+                    self.api_client = DefaultApi(
+                        access_key=self.access_key,
+                        secret_key=self.secret_key,
+                        host=self.host,
+                        region=self.region
+                    )
+                bot_logger.log_info("AmazonPAAPIClient", "PAAPI 5.0 client initialized successfully")
+            except Exception as e:
+                print(f"DEBUG: Failed to initialize PAAPI client: {e}")
+                import traceback
+                traceback.print_exc()
+                bot_logger.log_error("AmazonPAAPIClient", e, "Failed to initialize PAAPI client")
+                self.api_client = None
 
     async def search_items(self, keywords: str, min_rating: float = 0.0) -> Optional[Dict[str, Any]]:
         """
-        Выполняет поиск товаров через Amazon PA API 5.0 или возвращает mock данные.
+        Search for products using Amazon PA API 5.0.
 
         Args:
-            keywords: Ключевые слова для поиска
-            min_rating: Минимальный рейтинг товара
+            keywords: Search keywords
+            min_rating: Minimum rating filter
 
         Returns:
-            Словарь с данными товара или None в случае ошибки
+            Product data dictionary or None if error
         """
-        # If Amazon API is disabled, return mock data
-        if not self.use_amazon_api:
-            return self._get_mock_product_data(keywords, min_rating)
-
-        if not self.session:
-            self.session = aiohttp.ClientSession()
-
-        # Создаем timestamp для подписи
-        now = datetime.utcnow()
-        amz_date = now.strftime('%Y%m%dT%H%M%SZ')
-        date_stamp = now.strftime('%Y%m%d')
-
-        # Создаем payload для запроса
-        payload = {
-            "Keywords": keywords,
-            "SearchIndex": "All",
-            "ItemCount": 1,  # Получаем только один товар
-            "Resources": [
-                "ItemInfo.Title",
-                "Images.Primary.Large",
-                "Offers.Listings.Price",
-                "ItemInfo.Features",
-                "ItemInfo.ProductInfo"
-            ],
-            "PartnerTag": self.associate_tag,
-            "PartnerType": "Associates",
-            "Marketplace": self.marketplace
-        }
-
-        # Добавляем фильтр по рейтингу, если указан
-        if min_rating > 0:
-            payload["MinReviewsRating"] = min_rating
-
-        payload_json = json.dumps(payload)
-
-        # Создаем подпись
-        authorization_header = self._sign_request(payload_json, amz_date, date_stamp)
-
-        # Создаем заголовки
-        headers = {
-            "Authorization": authorization_header,
-            "Content-Type": "application/json; charset=UTF-8",
-            "X-Amz-Date": amz_date,
-            "X-Amz-Target": "com.amazon.paapi5.v1.ProductAdvertisingAPIv1.SearchItems",
-            "Content-Encoding": "amz-1.0"
-        }
+        # If Amazon API is disabled or SDK not available, use fallback
+        if not self.use_amazon_api or not PAAPI_AVAILABLE or not self.api_client:
+            bot_logger.log_info("AmazonPAAPIClient", "Using Google Sheets fallback for product data")
+            return self._get_sheets_fallback_data(keywords, min_rating)
 
         try:
-            # Выполняем запрос
-            async with self.session.post(
-                self.endpoint,
-                data=payload_json,
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=30)
-            ) as response:
+            if PAAPI_AVAILABLE == "amazon_paapi":
+                # Use amazon.paapi package
+                response = self.api_client.search_items(keywords=keywords, search_index='All')
 
-                if response.status != 200:
-                    error_text = await response.text()
-                    bot_logger.log_error(
-                        "AmazonPAAPIClient",
-                        Exception(f"HTTP {response.status}: {error_text}"),
-                        f"Keywords: {keywords}"
-                    )
-                    return None
+                if response and hasattr(response, 'data') and response.data:
+                    # Extract first item from amazon.paapi response
+                    item = response.data[0]
 
-                data = await response.json()
+                    # Convert amazon.paapi format to our standard format
+                    product_data = {
+                        "ASIN": getattr(item, 'asin', ''),
+                        "Title": getattr(item, 'product_title', ''),
+                        "ImageURL": getattr(item, 'product_photo', ''),
+                        "AffiliateLink": getattr(item, 'product_url', ''),
+                        "Price": getattr(item, 'product_price', ''),
+                        "Rating": str(getattr(item, 'product_star_rating', '')),
+                        "ReviewsCount": str(getattr(item, 'product_num_ratings', '')),
+                        "Category": getattr(item, 'product_byline', ''),
+                        "Description": getattr(item, 'product_description', '')
+                    }
 
-                # Проверяем на ошибки в ответе
-                if "Errors" in data:
-                    error = data["Errors"][0]
-                    bot_logger.log_error(
-                        "AmazonPAAPIClient",
-                        Exception(f"API Error: {error.get('Code', 'Unknown')} - {error.get('Message', 'Unknown')}"),
-                        f"Keywords: {keywords}"
-                    )
-                    return None
+                    bot_logger.log_info("AmazonPAAPIClient",
+                                      f"Successfully retrieved product: {product_data.get('Title', 'Unknown')}")
 
-                # Извлекаем данные товара
-                items = data.get("SearchResult", {}).get("Items", [])
-                if not items:
-                    bot_logger.log_error(
-                        "AmazonPAAPIClient",
-                        Exception("No items found"),
-                        f"Keywords: {keywords}"
-                    )
-                    return None
+                    return product_data
+                else:
+                    bot_logger.log_error("AmazonPAAPIClient", Exception("No items found"), f"Keywords: {keywords}")
+                    return self._get_sheets_fallback_data(keywords, min_rating)
 
-                item = items[0]  # Берем первый товар
+            else:
+                # Use paapi5_python_sdk
+                # Create search request
+                search_items_request = SearchItemsRequest(
+                    partner_tag=self.associate_tag,
+                    partner_type=PartnerType.ASSOCIATES,
+                    keywords=keywords,
+                    search_index="All",
+                    item_count=5,  # Get multiple items for selection
+                    resources=[
+                        SearchItemsResource.ITEMINFO_TITLE,
+                        SearchItemsResource.OFFERS_LISTINGS_PRICE,
+                        SearchItemsResource.IMAGES_PRIMARY_LARGE,
+                        SearchItemsResource.ITEMINFO_FEATURES,
+                        SearchItemsResource.ITEMINFO_PRODUCT_INFO,
+                        SearchItemsResource.OFFERS_SUMMARIES_HIGHEST_PRICE,
+                        SearchItemsResource.OFFERS_SUMMARIES_LOWEST_PRICE,
+                        SearchItemsResource.ITEMINFO_BY_LINE_INFO,
+                        SearchItemsResource.ITEMINFO_MANUFACTURE_INFO,
+                    ],
+                )
 
-                # Извлекаем нужные поля
-                title = item.get("ItemInfo", {}).get("Title", {}).get("DisplayValue", "No Title")
-                image_url = item.get("Images", {}).get("Primary", {}).get("Large", {}).get("URL", "")
-                detail_page_url = item.get("DetailPageURL", "")
+                # Add rating filter if specified
+                if min_rating > 0:
+                    search_items_request.min_reviews_rating = min_rating
 
-                # Получаем ASIN
-                asin = item.get("ASIN", "")
+                # Perform search
+                response = self.api_client.search_items(search_items_request)
 
-                return {
-                    "ASIN": asin,
-                    "Title": title,
-                    "ImageURL": image_url,
-                    "AffiliateLink": detail_page_url
-                }
+                if response.search_result and response.search_result.items:
+                    # Get the first item
+                    item = response.search_result.items[0]
 
-        except aiohttp.ClientError as e:
-            bot_logger.log_error(
+                    # Extract product data
+                    product_data = self._extract_product_data(item)
+
+                    bot_logger.log_info("AmazonPAAPIClient",
+                                      f"Successfully retrieved product: {product_data.get('Title', 'Unknown')}")
+
+                    return product_data
+                else:
+                    bot_logger.log_error("AmazonPAAPIClient", Exception("No items found"), f"Keywords: {keywords}")
+                    return self._get_sheets_fallback_data(keywords, min_rating)
+
+        except Exception as e:
+            bot_logger.log_error("AmazonPAAPIClient", e, f"Unexpected error for keywords: {keywords}")
+            return self._get_sheets_fallback_data(keywords, min_rating)
+
+    def _extract_product_data(self, item) -> Dict[str, Any]:
+        """Extract product data from PAAPI response item."""
+        product_data = {
+            "ASIN": getattr(item, 'asin', ''),
+            "Title": "",
+            "ImageURL": "",
+            "AffiliateLink": getattr(item, 'detail_page_url', ''),
+            "Price": "",
+            "Rating": "",
+            "ReviewsCount": "",
+            "Category": "",
+            "Description": ""
+        }
+
+        # Extract title
+        if hasattr(item, 'item_info') and item.item_info:
+            if hasattr(item.item_info, 'title') and item.item_info.title:
+                product_data["Title"] = getattr(item.item_info.title, 'display_value', '')
+
+            # Extract category
+            if hasattr(item.item_info, 'product_info') and item.item_info.product_info:
+                if hasattr(item.item_info.product_info, 'item_dimensions') and item.item_info.product_info.item_dimensions:
+                    if hasattr(item.item_info.product_info.item_dimensions, 'item_width') and item.item_info.product_info.item_dimensions.item_width:
+                        product_data["Category"] = getattr(item.item_info.product_info.item_dimensions.item_width, 'display_value', '')
+
+        # Extract image
+        if hasattr(item, 'images') and item.images:
+            if hasattr(item.images, 'primary') and item.images.primary:
+                if hasattr(item.images.primary, 'large') and item.images.primary.large:
+                    product_data["ImageURL"] = getattr(item.images.primary.large, 'url', '')
+
+        # Extract price
+        if hasattr(item, 'offers') and item.offers:
+            if hasattr(item.offers, 'listings') and item.offers.listings:
+                for listing in item.offers.listings:
+                    if hasattr(listing, 'price') and listing.price:
+                        product_data["Price"] = getattr(listing.price, 'display_amount', '')
+                        break
+
+        # Extract rating and reviews
+        if hasattr(item, 'item_info') and item.item_info:
+            if hasattr(item.item_info, 'product_info') and item.item_info.product_info:
+                if hasattr(item.item_info.product_info, 'customer_reviews') and item.item_info.product_info.customer_reviews:
+                    reviews = item.item_info.product_info.customer_reviews
+                    if hasattr(reviews, 'count') and reviews.count:
+                        product_data["ReviewsCount"] = str(reviews.count)
+                    if hasattr(reviews, 'star_rating') and reviews.star_rating:
+                        if hasattr(reviews.star_rating, 'rating') and reviews.star_rating.rating:
+                            product_data["Rating"] = str(reviews.star_rating.rating)
+
+        # Extract description/features
+        if hasattr(item, 'item_info') and item.item_info:
+            if hasattr(item.item_info, 'features') and item.item_info.features:
+                if hasattr(item.item_info.features, 'display_values') and item.item_info.features.display_values:
+                    product_data["Description"] = ' '.join(item.item_info.features.display_values[:3])  # First 3 features
+
+        return product_data
+
+    def _get_sheets_fallback_data(self, keywords: str, min_rating: float = 0.0) -> Optional[Dict[str, Any]]:
+        """
+        Get product data from Google Sheets as fallback when Amazon API is unavailable.
+
+        Args:
+            keywords: Search keywords (used to filter products)
+            min_rating: Minimum rating filter
+
+        Returns:
+            Product data dictionary from Google Sheets
+        """
+        try:
+            from services.sheets_api import sheets_api
+
+            # Get products from Google Sheets
+            products_data = sheets_api.get_sheet_data('products')
+
+            if not products_data or len(products_data) < 2:  # No data or only headers
+                bot_logger.log_error(
+                    "AmazonPAAPIClient",
+                    Exception("No products found in Google Sheets"),
+                    "Using basic fallback"
+                )
+                return self._get_basic_fallback_data(keywords)
+
+            # Parse headers
+            headers = products_data[0]
+            if len(headers) < 11:
+                bot_logger.log_error(
+                    "AmazonPAAPIClient",
+                    Exception("Invalid products worksheet format"),
+                    "Using basic fallback"
+                )
+                return self._get_basic_fallback_data(keywords)
+
+            # Create column index mapping
+            col_indices = {header: idx for idx, header in enumerate(headers)}
+
+            # Filter products by keywords and rating
+            matching_products = []
+            for row in products_data[1:]:  # Skip header
+                if len(row) < len(headers):
+                    continue
+
+                # Check if product is active
+                active = row[col_indices.get('active', -1)].upper() if col_indices.get('active', -1) >= 0 else 'TRUE'
+                if active != 'TRUE':
+                    continue
+
+                # Check rating filter
+                try:
+                    rating = float(row[col_indices.get('rating', -1)]) if col_indices.get('rating', -1) >= 0 else 4.0
+                    if rating < min_rating:
+                        continue
+                except (ValueError, IndexError):
+                    continue
+
+                # Check keyword match in name or description
+                name = row[col_indices.get('name', -1)].lower() if col_indices.get('name', -1) >= 0 else ''
+                description = row[col_indices.get('description', -1)].lower() if col_indices.get('description', -1) >= 0 else ''
+
+                if keywords.lower() in name or keywords.lower() in description:
+                    matching_products.append(row)
+
+            # If no matches, return any active product
+            if not matching_products:
+                matching_products = [row for row in products_data[1:]
+                                   if len(row) >= len(headers) and
+                                   (row[col_indices.get('active', -1)].upper() if col_indices.get('active', -1) >= 0 else 'TRUE') == 'TRUE']
+
+            if not matching_products:
+                return self._get_basic_fallback_data(keywords)
+
+            # Select a random matching product
+            import random
+            selected_product = random.choice(matching_products)
+
+            # Extract product data
+            product_id = selected_product[col_indices.get('id', 0)] if col_indices.get('id', -1) >= 0 else 'UNKNOWN'
+            name = selected_product[col_indices.get('name', 1)] if col_indices.get('name', -1) >= 0 else 'Unknown Product'
+            image_url = selected_product[col_indices.get('image_url', 7)] if col_indices.get('image_url', -1) >= 0 else ''
+            affiliate_link = selected_product[col_indices.get('affiliate_link', 8)] if col_indices.get('affiliate_link', -1) >= 0 else ''
+            price = selected_product[col_indices.get('price', 4)] if col_indices.get('price', -1) >= 0 else ''
+            rating = selected_product[col_indices.get('rating', 5)] if col_indices.get('rating', -1) >= 0 else ''
+            reviews_count = selected_product[col_indices.get('reviews_count', 6)] if col_indices.get('reviews_count', -1) >= 0 else ''
+
+            bot_logger.log_info(
                 "AmazonPAAPIClient",
-                e,
-                f"Network error for keywords: {keywords}"
+                f"Using Google Sheets fallback for keywords: {keywords} -> {name}"
             )
-            return None
+
+            return {
+                "ASIN": product_id,
+                "Title": name,
+                "ImageURL": image_url,
+                "AffiliateLink": affiliate_link,
+                "Price": price,
+                "Rating": rating,
+                "ReviewsCount": reviews_count
+            }
+
         except Exception as e:
             bot_logger.log_error(
                 "AmazonPAAPIClient",
                 e,
-                f"Unexpected error for keywords: {keywords}"
+                f"Google Sheets fallback failed for keywords: {keywords}"
             )
-            return None
+            return self._get_basic_fallback_data(keywords)
+
+    def _get_basic_fallback_data(self, keywords: str) -> Dict[str, Any]:
+        """Basic fallback when both Amazon API and Google Sheets fail."""
+        import random
+        import hashlib
+
+        seed = hashlib.md5(keywords.encode()).hexdigest()
+        random.seed(seed)
+
+        return {
+            "ASIN": f"FALLBACK{random.randint(100000, 999999)}",
+            "Title": f"Premium {keywords.title()} Product",
+            "ImageURL": f"https://picsum.photos/400/400?random={random.randint(1, 1000)}",
+            "AffiliateLink": f"https://www.amazon.it/dp/fallback{random.randint(100000, 999999)}?tag={self.associate_tag}",
+            "Price": f"€{random.randint(10, 100)},{random.randint(10, 99)}",
+            "Rating": f"{random.uniform(3.5, 5.0):.1f}",
+            "ReviewsCount": str(random.randint(10, 1000))
+        }
 
     def _get_mock_product_data(self, keywords: str, min_rating: float = 0.0) -> Optional[Dict[str, Any]]:
         """
