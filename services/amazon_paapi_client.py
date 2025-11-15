@@ -1,25 +1,29 @@
 # services/amazon_paapi_client.py
 import asyncio
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from config import conf
 from services.logger import bot_logger
 
 try:
-    from amazon.paapi import AmazonAPI
+    from amazon.paapi import (
+        AmazonAPI, PartnerType, SearchItemsRequest, SearchItemsResource,
+        GetItemsRequest, GetItemsResource, DeliveryFlag, ApiException
+    )
     PAAPI_AVAILABLE = "amazon_paapi"
-    print("DEBUG: amazon.paapi imported successfully")
 except ImportError as e:
-    print(f"DEBUG: amazon.paapi import failed: {e}")
+    print(f"amazon.paapi import failed: {e}")
     try:
         from paapi5_python_sdk.api.default_api import DefaultApi
         from paapi5_python_sdk.models.partner_type import PartnerType
         from paapi5_python_sdk.models.search_items_request import SearchItemsRequest
         from paapi5_python_sdk.models.search_items_resource import SearchItemsResource
+        from paapi5_python_sdk.models.get_items_request import GetItemsRequest
+        from paapi5_python_sdk.models.get_items_resource import GetItemsResource
+        from paapi5_python_sdk.models.delivery_flag import DeliveryFlag
         from paapi5_python_sdk.rest import ApiException
         PAAPI_AVAILABLE = "paapi5_python_sdk"
-        print("DEBUG: paapi5_python_sdk imported successfully")
     except ImportError as e2:
-        print(f"DEBUG: paapi5_python_sdk import failed: {e2}")
+        print(f"paapi5_python_sdk import failed: {e2}")
         PAAPI_AVAILABLE = False
         bot_logger.log_error("AmazonPAAPIClient", Exception("PAAPI5 SDK not available"), "Using fallback methods")
 
@@ -74,13 +78,14 @@ class AmazonPAAPIClient:
                 bot_logger.log_error("AmazonPAAPIClient", e, "Failed to initialize PAAPI client")
                 self.api_client = None
 
-    async def search_items(self, keywords: str, min_rating: float = 0.0) -> Optional[Dict[str, Any]]:
+    async def search_items(self, keywords: str, min_rating: float = 0.0, filters: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
         """
-        Search for products using Amazon PA API 5.0.
+        Advanced search for products using Amazon PA API 5.0 with sophisticated filtering.
 
         Args:
             keywords: Search keywords
             min_rating: Minimum rating filter
+            filters: Advanced filters dictionary
 
         Returns:
             Product data dictionary or None if error
@@ -90,83 +95,254 @@ class AmazonPAAPIClient:
             bot_logger.log_info("AmazonPAAPIClient", "Using Google Sheets fallback for product data")
             return self._get_sheets_fallback_data(keywords, min_rating)
 
+        # Set default filters if none provided
+        if filters is None:
+            filters = {
+                "MinPrice": 10.00,
+                "MinSavingPercent": 5,
+                "MinReviewsRating": max(min_rating, 3.5),
+                "FulfilledByAmazon": True
+            }
+
         try:
             if PAAPI_AVAILABLE == "amazon_paapi":
-                # Use amazon.paapi package
-                response = self.api_client.search_items(keywords=keywords, search_index='All')
-
-                if response and hasattr(response, 'data') and response.data:
-                    # Extract first item from amazon.paapi response
-                    item = response.data[0]
-
-                    # Convert amazon.paapi format to our standard format
-                    product_data = {
-                        "ASIN": getattr(item, 'asin', ''),
-                        "Title": getattr(item, 'product_title', ''),
-                        "ImageURL": getattr(item, 'product_photo', ''),
-                        "AffiliateLink": getattr(item, 'product_url', ''),
-                        "Price": getattr(item, 'product_price', ''),
-                        "Rating": str(getattr(item, 'product_star_rating', '')),
-                        "ReviewsCount": str(getattr(item, 'product_num_ratings', '')),
-                        "Category": getattr(item, 'product_byline', ''),
-                        "Description": getattr(item, 'product_description', '')
-                    }
-
-                    bot_logger.log_info("AmazonPAAPIClient",
-                                      f"Successfully retrieved product: {product_data.get('Title', 'Unknown')}")
-
-                    return product_data
-                else:
-                    bot_logger.log_error("AmazonPAAPIClient", Exception("No items found"), f"Keywords: {keywords}")
-                    return self._get_sheets_fallback_data(keywords, min_rating)
+                # Use advanced search with multiple steps
+                return await self._advanced_search_api(keywords, filters)
 
             else:
-                # Use paapi5_python_sdk
-                # Create search request
-                search_items_request = SearchItemsRequest(
-                    partner_tag=self.associate_tag,
-                    partner_type=PartnerType.ASSOCIATES,
-                    keywords=keywords,
-                    search_index="All",
-                    item_count=5,  # Get multiple items for selection
-                    resources=[
-                        SearchItemsResource.ITEMINFO_TITLE,
-                        SearchItemsResource.OFFERS_LISTINGS_PRICE,
-                        SearchItemsResource.IMAGES_PRIMARY_LARGE,
-                        SearchItemsResource.ITEMINFO_FEATURES,
-                        SearchItemsResource.ITEMINFO_PRODUCT_INFO,
-                        SearchItemsResource.OFFERS_SUMMARIES_HIGHEST_PRICE,
-                        SearchItemsResource.OFFERS_SUMMARIES_LOWEST_PRICE,
-                        SearchItemsResource.ITEMINFO_BY_LINE_INFO,
-                        SearchItemsResource.ITEMINFO_MANUFACTURE_INFO,
-                    ],
-                )
-
-                # Add rating filter if specified
-                if min_rating > 0:
-                    search_items_request.min_reviews_rating = min_rating
-
-                # Perform search
-                response = self.api_client.search_items(search_items_request)
-
-                if response.search_result and response.search_result.items:
-                    # Get the first item
-                    item = response.search_result.items[0]
-
-                    # Extract product data
-                    product_data = self._extract_product_data(item)
-
-                    bot_logger.log_info("AmazonPAAPIClient",
-                                      f"Successfully retrieved product: {product_data.get('Title', 'Unknown')}")
-
-                    return product_data
-                else:
-                    bot_logger.log_error("AmazonPAAPIClient", Exception("No items found"), f"Keywords: {keywords}")
-                    return self._get_sheets_fallback_data(keywords, min_rating)
+                # Use paapi5_python_sdk with basic search
+                return self._basic_search_api(keywords, min_rating)
 
         except Exception as e:
             bot_logger.log_error("AmazonPAAPIClient", e, f"Unexpected error for keywords: {keywords}")
             return self._get_sheets_fallback_data(keywords, min_rating)
+
+    async def _advanced_search_api(self, keywords: str, filters: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Advanced search using SearchItems + GetItems enrichment."""
+        try:
+            # Step 1: Search for candidate products
+            candidate_products = self._search_candidates(keywords, filters)
+            if not candidate_products:
+                return self._get_sheets_fallback_data(keywords, filters.get("MinReviewsRating", 0))
+
+            # Step 2: Extract ASINs and enrich with detailed data
+            candidate_asins = [p.get('asin') for p in candidate_products if p.get('asin')]
+
+            # Step 3: Get detailed information for top candidates
+            enriched_products = self._enrich_products(candidate_asins)
+
+            # Step 4: Apply final filtering and select best product
+            final_product = self._select_best_product(enriched_products, filters)
+
+            if final_product:
+                bot_logger.log_info("AmazonPAAPIClient",
+                                  f"Successfully retrieved premium product: {final_product.get('Title', 'Unknown')}")
+                return final_product
+
+            return self._get_sheets_fallback_data(keywords, filters.get("MinReviewsRating", 0))
+
+        except Exception as e:
+            bot_logger.log_error("AmazonPAAPIClient", e, f"Advanced search failed for keywords: {keywords}")
+            return self._get_sheets_fallback_data(keywords, filters.get("MinReviewsRating", 0))
+
+    def _search_candidates(self, keywords: str, filters: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Search for candidate products using SearchItems API."""
+        try:
+            # Convert price to cents for API
+            min_price_cents = int(filters.get("MinPrice", 0) * 100) if filters.get("MinPrice") else None
+
+            # Handle delivery flags
+            delivery_flags = []
+            if filters.get("FulfilledByAmazon"):
+                delivery_flags.append(DeliveryFlag.FULFILLEDBYAMAZON)
+
+            # Create search request
+            search_request = SearchItemsRequest(
+                partner_tag=self.associate_tag,
+                partner_type=PartnerType.ASSOCIATES,
+                marketplace="www.amazon.it",
+                keywords=keywords,
+                search_index="All",
+                item_page=1,
+                item_count=10,
+                sort_by="Featured",
+                min_price=min_price_cents,
+                min_saving_percent=filters.get("MinSavingPercent"),
+                min_reviews_rating=filters.get("MinReviewsRating"),
+                delivery_flags=delivery_flags if delivery_flags else None
+            )
+
+            response = self.api_client.search_items(search_request)
+
+            if response and hasattr(response, 'search_result') and response.search_result:
+                items = getattr(response.search_result, 'items', [])
+                return [item.to_dict() if hasattr(item, 'to_dict') else item for item in items]
+
+            return []
+
+        except ApiException as e:
+            bot_logger.log_error("AmazonPAAPIClient", Exception(f"Search API Error: {e.reason}"), f"Keywords: {keywords}")
+            return []
+        except Exception as e:
+            bot_logger.log_error("AmazonPAAPIClient", e, f"Search failed for keywords: {keywords}")
+            return []
+
+    def _enrich_products(self, asins: List[str]) -> List[Dict[str, Any]]:
+        """Enrich products with detailed information using GetItems API."""
+        if not asins:
+            return []
+
+        try:
+            # Split ASINs into chunks of 10
+            asin_chunks = [asins[i:i + 10] for i in range(0, len(asins), 10)]
+            enriched_items = []
+
+            for chunk in asin_chunks:
+                get_request = GetItemsRequest(
+                    partner_tag=self.associate_tag,
+                    partner_type=PartnerType.ASSOCIATES,
+                    marketplace="www.amazon.it",
+                    item_ids=chunk,
+                    resources=[
+                        GetItemsResource.ITEMINFO_TITLE,
+                        GetItemsResource.OFFERS_LISTINGS_PRICE,
+                        GetItemsResource.IMAGES_PRIMARY_LARGE,
+                        GetItemsResource.CUSTOMERREVIEWS_COUNT,
+                        GetItemsResource.CUSTOMERREVIEWS_STARRATING,
+                        GetItemsResource.ITEMINFO_FEATURES,
+                        GetItemsResource.BROWSENODEINFO_WEBSITESALESRANK
+                    ]
+                )
+
+                try:
+                    response = self.api_client.get_items(get_request)
+                    if response and hasattr(response, 'items_result') and response.items_result:
+                        items = getattr(response.items_result, 'items', [])
+                        enriched_items.extend([item.to_dict() if hasattr(item, 'to_dict') else item for item in items])
+                except ApiException as e:
+                    bot_logger.log_error("AmazonPAAPIClient", Exception(f"GetItems API Error: {e.reason}"), f"ASINs: {chunk}")
+                except Exception as e:
+                    bot_logger.log_error("AmazonPAAPIClient", e, f"GetItems failed for ASINs: {chunk}")
+
+                # Rate limiting
+                import asyncio
+                asyncio.sleep(0.1)
+
+            return enriched_items
+
+        except Exception as e:
+            bot_logger.log_error("AmazonPAAPIClient", e, f"Enrichment failed for ASINs: {asins}")
+            return []
+
+    def _select_best_product(self, products: List[Dict[str, Any]], filters: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Select the best product based on filters and quality metrics."""
+        if not products:
+            return None
+
+        min_reviews_count = filters.get("MinReviewsCount", 50)
+        min_rating = filters.get("MinReviewsRating", 3.5)
+
+        # Filter and score products
+        scored_products = []
+        for product in products:
+            try:
+                # Extract review data
+                customer_reviews = product.get('customer_reviews', {})
+                review_count = customer_reviews.get('count', 0) if customer_reviews else 0
+                rating = float(customer_reviews.get('star_rating', {}).get('rating', 0)) if customer_reviews.get('star_rating') else 0
+
+                # Apply filters
+                if review_count < min_reviews_count or rating < min_rating:
+                    continue
+
+                # Calculate quality score (higher is better)
+                # Sales rank (lower rank number = better selling)
+                sales_rank = product.get('browse_node_info', {}).get('website_sales_rank', 999999)
+                if isinstance(sales_rank, dict):
+                    sales_rank = sales_rank.get('sales_rank', 999999)
+
+                # Score = rating * log(review_count + 1) / log(sales_rank + 1)
+                import math
+                quality_score = rating * math.log(review_count + 1) / math.log(sales_rank + 1) if sales_rank > 0 else rating
+
+                scored_products.append((quality_score, product))
+
+            except Exception as e:
+                continue
+
+        if not scored_products:
+            return None
+
+        # Select product with highest quality score
+        best_product = max(scored_products, key=lambda x: x[0])[1]
+
+        # Convert to our standard format
+        return self._convert_to_standard_format(best_product)
+
+    def _convert_to_standard_format(self, product: Dict[str, Any]) -> Dict[str, Any]:
+        """Convert enriched product data to our standard format."""
+        # Basic Info
+        title = product.get('item_info', {}).get('title', {}).get('display_value', 'N/A')
+        price = product.get('offers', {}).get('listings', [{}])[0].get('price', {}).get('display_amount', 'N/A')
+        reviews = product.get('customer_reviews', {}).get('count', 'N/A') if product.get('customer_reviews') else 'N/A'
+        link = product.get('detail_page_url', 'N/A')
+        image = product.get('images', {}).get('primary', {}).get('large', {}).get('url', 'N/A')
+
+        # Enhanced data
+        sales_rank = product.get('browse_node_info', {}).get('website_sales_rank', 'N/A')
+        if isinstance(sales_rank, dict):
+            sales_rank = sales_rank.get('sales_rank', 'N/A')
+
+        rating = product.get('customer_reviews', {}).get('star_rating', {}).get('rating', 'N/A') if product.get('customer_reviews', {}).get('star_rating') else 'N/A'
+
+        # Features as description
+        features = product.get('item_info', {}).get('features', {}).get('display_values', [])
+        description = ' '.join(features[:3]) if features else ''
+
+        return {
+            "ASIN": product.get('asin', ''),
+            "Title": title,
+            "ImageURL": image,
+            "AffiliateLink": link,
+            "Price": price,
+            "Rating": str(rating),
+            "ReviewsCount": str(reviews),
+            "SalesRank": str(sales_rank),
+            "Description": description
+        }
+
+    def _basic_search_api(self, keywords: str, min_rating: float) -> Optional[Dict[str, Any]]:
+        """Fallback to basic search for paapi5_python_sdk."""
+        try:
+            search_items_request = SearchItemsRequest(
+                partner_tag=self.associate_tag,
+                partner_type=PartnerType.ASSOCIATES,
+                keywords=keywords,
+                search_index="All",
+                item_count=5,
+                resources=[
+                    SearchItemsResource.ITEMINFO_TITLE,
+                    SearchItemsResource.OFFERS_LISTINGS_PRICE,
+                    SearchItemsResource.IMAGES_PRIMARY_LARGE,
+                    SearchItemsResource.ITEMINFO_FEATURES,
+                    SearchItemsResource.ITEMINFO_PRODUCT_INFO,
+                ],
+            )
+
+            if min_rating > 0:
+                search_items_request.min_reviews_rating = min_rating
+
+            response = self.api_client.search_items(search_items_request)
+
+            if response.search_result and response.search_result.items:
+                item = response.search_result.items[0]
+                return self._extract_product_data(item)
+
+            return None
+
+        except Exception as e:
+            bot_logger.log_error("AmazonPAAPIClient", e, f"Basic search failed for keywords: {keywords}")
+            return None
 
     def _extract_product_data(self, item) -> Dict[str, Any]:
         """Extract product data from PAAPI response item."""
