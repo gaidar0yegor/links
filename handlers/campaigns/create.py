@@ -5,6 +5,7 @@ from aiogram.fsm.context import FSMContext
 from typing import List, Tuple
 from states.campaign_states import CampaignStates
 from services.sheets_api import sheets_api
+from services.campaign_manager import campaign_manager
 from handlers.campaigns.keyboards import get_multiselect_keyboard
 from handlers.main_menu import MainMenuCallback # Для кнопки "Назад"
 
