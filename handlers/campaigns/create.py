@@ -24,6 +24,37 @@ async def get_options_from_gsheets(sheet_name: str) -> List[Tuple[str, str]]:
     # Если данные только в одной колонке, используем название как значение
     elif len(data) > 1 and len(data[0]) >= 1:
         return [(row[0], row[0]) for row in data[1:] if row[0]]
+
+    # Fallback options when no Google Sheets data is available
+    if sheet_name == "channels":
+        return [
+            ("@CheapAmazon3332234", "@CheapAmazon3332234"),
+            ("Add Custom Channel", "custom_channel")
+        ]
+    elif sheet_name == "categories":
+        return [
+            ("Electronics", "electronics"),
+            ("Home & Kitchen", "home"),
+            ("Fashion", "fashion"),
+            ("Sports", "sports"),
+            ("Books", "books")
+        ]
+    elif sheet_name == "subcategories":
+        return [
+            ("Smartphones", "smartphones"),
+            ("Laptops", "laptops"),
+            ("Headphones", "headphones"),
+            ("Cameras", "cameras"),
+            ("Gaming", "gaming")
+        ]
+    elif sheet_name == "languages":
+        return [
+            ("English", "en"),
+            ("Italian", "it"),
+            ("Spanish", "es"),
+            ("French", "fr")
+        ]
+
     return []
 
 # --- Шаг 1: Выбор Канала (2.3.2.1) ---
@@ -47,7 +78,8 @@ async def start_new_campaign(callback: CallbackQuery, state: FSMContext):
     print(f"🔥 DEBUG: Loaded {len(options)} channel options")
 
     await callback.message.edit_text(
-        "**ШАГ 1/N: Выбор рекламных каналов** (Мультивыбор)\n\nВыберите один или несколько каналов для кампании:",
+        "**🎯 ШАГ 1: Affiliate Channels** (Мультивыбор)\n\n"
+        "💰 Выберите Telegram каналы для автоматического постинга партнерских ссылок Amazon:",
         reply_markup=get_multiselect_keyboard(
             options=options,
             selected_values=[], # Пока ничего не выбрано
