@@ -14,8 +14,6 @@ services:
     env_file:
       - .env # Используем файл .env для переменных окружения (токен, ключи БД)
     volumes:
-      # Маппинг для GSheets ключа, чтобы бот мог его прочитать
-      - ./gsheets_keys.json:/app/gsheets_keys.json:ro
       # Для логирования и других временных файлов, если нужно
       - bot_logs:/app/logs
 
