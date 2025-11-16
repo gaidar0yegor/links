@@ -65,22 +65,24 @@ def get_day_select_keyboard(campaign_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-@router.callback_query(F.data == MainMenuCallback.CAMPAIGNS)
+# REMOVED: Duplicate handler for MainMenuCallback.CAMPAIGNS
+# This is now handled by handlers/main_menu.py to avoid conflicts
+
 async def enter_campaign_module(callback: CallbackQuery, state: FSMContext):
     """Обрабатывает вход в модуль 'Рекламные кампании'."""
-    print(f"🔥 DEBUG: enter_campaign_module called with data: {callback.data}")
+    print(f"🎯 Campaign module entered from main menu")
 
     await state.set_state(CampaignStates.in_campaign_menu)
 
     # Получаем список кампаний из БД
     try:
         campaigns = await campaign_manager.get_all_campaigns_summary()
-        print(f"🔥 DEBUG: Got campaigns: {campaigns}")
+        print(f"� Retrieved {len(campaigns)} campaigns")
     except Exception as e:
-        print(f"🔥 DEBUG: Error getting campaigns: {e}")
+        print(f"❌ Error getting campaigns: {e}")
         campaigns = []
 
-    text = "Управление рекламными кампаниями:\nВыберите операцию или кампанию для редактирования."
+    text = "**🎯 Affiliate Campaigns Management**\n\nChoose an operation or select a campaign to edit:"
 
     await callback.message.edit_text(
         text,

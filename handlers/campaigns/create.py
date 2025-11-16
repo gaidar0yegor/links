@@ -31,16 +31,14 @@ async def get_options_from_gsheets(sheet_name: str) -> List[Tuple[str, str]]:
             ("@CheapAmazon3332234", "@CheapAmazon3332234"),
             ("Add Custom Channel", "custom_channel")
         ]
-    elif sheet_name == "categories":
+    elif sheet_name == "product_categories":
+        # Combined categories and subcategories with browse_node_id
         return [
             ("Electronics", "electronics"),
             ("Home & Kitchen", "home"),
             ("Fashion", "fashion"),
             ("Sports", "sports"),
-            ("Books", "books")
-        ]
-    elif sheet_name == "subcategories":
-        return [
+            ("Books", "books"),
             ("Smartphones", "smartphones"),
             ("Laptops", "laptops"),
             ("Headphones", "headphones"),
@@ -56,6 +54,44 @@ async def get_options_from_gsheets(sheet_name: str) -> List[Tuple[str, str]]:
         ]
 
     return []
+
+async def get_browse_node_id(category: str, subcategory: str = None) -> str:
+    """Get browse_node_id for category/subcategory combination."""
+    try:
+        data = sheets_api.get_sheet_data("product_categories")
+        if len(data) > 1:
+            headers = data[0]
+            # Expected columns: Category, Subcategory, browse_node_id, active
+            col_indices = {header: idx for idx, header in enumerate(headers)}
+
+            for row in data[1:]:
+                if len(row) >= len(headers):
+                    row_category = row[col_indices.get('Category', 0)].strip()
+                    row_subcategory = row[col_indices.get('Subcategory', 1)].strip() if col_indices.get('Subcategory', -1) >= 0 else ""
+                    browse_node = row[col_indices.get('browse_node_id', 2)].strip() if col_indices.get('browse_node_id', -1) >= 0 else ""
+
+                    # Match category and subcategory (if provided)
+                    if row_category.lower() == category.lower():
+                        if not subcategory or row_subcategory.lower() == subcategory.lower():
+                            return browse_node
+    except Exception as e:
+        print(f"Error getting browse_node_id: {e}")
+
+    # Fallback browse node IDs for common categories
+    fallback_nodes = {
+        "electronics": "1626160311",  # Italy Electronics
+        "home": "524015031",  # Italy Home & Kitchen
+        "fashion": "1736683031",  # Italy Clothing
+        "sports": "524013031",  # Italy Sports
+        "books": "411663031",  # Italy Books
+        "smartphones": "425916031",  # Italy Smartphones
+        "laptops": "425916031",  # Italy Computers
+        "headphones": "425916031",  # Italy Audio
+        "cameras": "425916031",  # Italy Photo
+        "gaming": "425916031"  # Italy Gaming
+    }
+
+    return fallback_nodes.get(category.lower(), "1626160311")  # Default to Electronics
 
 # --- Шаг 1: Выбор Канала (2.3.2.1) ---
 
@@ -103,11 +139,12 @@ async def done_select_channels(callback: CallbackQuery, state: FSMContext):
 
     await state.set_state(CampaignStates.campaign_new_select_category)
 
-    # 1. Загрузка опций
-    options = await get_options_from_gsheets("categories")
+    # 1. Загрузка опций из объединенной таблицы product_categories
+    options = await get_options_from_gsheets("product_categories")
 
     await callback.message.edit_text(
-        "**ШАГ 2/N: Выбор категорий товаров** (Мультивыбор)\n\nВыберите категории товаров:",
+        "**🎯 ШАГ 2: Product Categories** (Мультивыбор)\n\n"
+        "📦 Выберите категории и подкатегории товаров для поиска на Amazon:",
         reply_markup=get_multiselect_keyboard(
             options=options,
             selected_values=[], # Пока ничего не выбрано
@@ -447,6 +484,17 @@ async def finalize_and_save_campaign(callback: CallbackQuery, state: FSMContext)
     campaign_data = data['new_campaign']
 
     try:
+        # Add browse_node_id for each selected category
+        categories_with_nodes = []
+        for category in campaign_data.get('categories', []):
+            browse_node = await get_browse_node_id(category)
+            categories_with_nodes.append({
+                'name': category,
+                'browse_node_id': browse_node
+            })
+
+        campaign_data['categories_with_nodes'] = categories_with_nodes
+
         # Проверка уникальности
         is_unique = await campaign_manager.is_name_unique(campaign_data['name'])
         if not is_unique:
