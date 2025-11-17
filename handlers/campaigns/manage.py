@@ -7,6 +7,7 @@ from services.campaign_manager import get_campaign_manager
 from states.campaign_states import CampaignStates
 from services.logger import bot_logger
 from datetime import datetime, time
+from handlers.campaigns.keyboards import get_multiselect_keyboard
 
 router = Router()
 
@@ -46,8 +47,10 @@ def get_campaign_edit_keyboard(campaign_id: int, current_status: str) -> InlineK
 
     buttons = [
         [status_button],
-        [InlineKeyboardButton(text="⏰ Установить/Изменить тайминги (2.4)", callback_data=f"campaign_timing:start:{campaign_id}")],
-        [InlineKeyboardButton(text="🗑 Удалить кампанию", callback_data=f"campaign_delete:{campaign_id}")],
+        # MODIFIED: Points to the new multi-select timing handler
+        [InlineKeyboardButton(text="⏰ Установить/Изменить тайминги (2.4)", callback_data=f"campaign_edit_timings:{campaign_id}")],
+        # MODIFIED: Points to the new delete confirmation handler
+        [InlineKeyboardButton(text="🗑 Удалить кампанию", callback_data=f"campaign_delete_confirm:{campaign_id}")],
         [InlineKeyboardButton(text="⬅️ Назад к списку", callback_data="back_to_campaign_menu")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -55,15 +58,7 @@ def get_campaign_edit_keyboard(campaign_id: int, current_status: str) -> InlineK
 DAYS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
 DAYS_MAPPING = {i: day for i, day in enumerate(DAYS)} # 0: "Пн", 1: "Вт" и т.д.
 
-def get_day_select_keyboard(campaign_id: int) -> InlineKeyboardMarkup:
-    """Клавиатура для выбора дня недели."""
-    buttons = []
-    # Кнопки для каждого дня недели
-    for i, day in DAYS_MAPPING.items():
-        buttons.append([InlineKeyboardButton(text=day, callback_data=f"timing_day:{i}:{campaign_id}")])
-
-    buttons.append([InlineKeyboardButton(text="⬅️ Назад к управлению", callback_data=f"campaign_edit:{campaign_id}")])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+# REMOVED: Old single-day selection keyboard function `get_day_select_keyboard`
 
 
 # REMOVED: Duplicate handler for MainMenuCallback.CAMPAIGNS
@@ -177,123 +172,217 @@ async def toggle_campaign_status(callback: CallbackQuery, state: FSMContext):
     # Возвращаемся в меню редактирования для обновления UI
     await enter_campaign_edit_menu(callback, state)
 
-@router.callback_query(F.data.startswith("campaign_timing:start:"))
-async def start_timing_setup(callback: CallbackQuery, state: FSMContext):
-    """Начинает процесс установки таймингов."""
-    # Получаем ID из колбэка
-    campaign_id = int(callback.data.split(":")[2])
+# --- NEW MULTI-SELECT TIMING WORKFLOW ---
 
-    # Переходим в FSM для таймингов
-    await state.set_state(CampaignStates.campaign_timing_select_day)
-    # Сохраняем ID, если он не сохранен (на случай прямого перехода)
-    await state.update_data({'current_campaign_id': campaign_id})
+@router.callback_query(F.data.startswith("campaign_edit_timings:"))
+async def edit_campaign_timings_handler(callback: CallbackQuery, state: FSMContext):
+    """Handler for 'Edit Timings' button, starts the multi-select flow."""
+    campaign_id = int(callback.data.split(":")[1])
+    await edit_campaign_timings(callback, state, campaign_id)
 
-    # Получаем текущие тайминги для отображения
+async def edit_campaign_timings(query_or_message: CallbackQuery | Message, state: FSMContext, campaign_id: int):
+    """Displays the timing management menu for a campaign with multi-select for days."""
+    message = query_or_message.message if isinstance(query_or_message, CallbackQuery) else query_or_message
+
     campaign_mgr = get_campaign_manager()
-    current_timings = await campaign_mgr.get_timings(campaign_id) if campaign_mgr else []
-    timings_text = "Текущие тайминги:\n"
-    if current_timings:
-        for t in current_timings:
-            day_name = DAYS_MAPPING.get(t['day_of_week'], 'Н/Д')
-            timings_text += f" - {day_name}: с {t['start_time']} до {t['end_time']}\n"
+    campaign = await campaign_mgr.get_campaign_details(campaign_id)
+    if not campaign:
+        await message.answer("❌ Кампания не найдена.")
+        return
+
+    campaign_name = campaign['name']
+    timings_list = await campaign_mgr.get_timings(campaign_id)
+    timings = {timing['day_of_week']: timing for timing in timings_list}
+    days_of_week = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+
+    timings_text = ""
+    for i, day in enumerate(days_of_week):
+        timing = timings.get(i)
+        if timing:
+            timings_text += f"\n- **{day}**: {timing['start_time'].strftime('%H:%M')} - {timing['end_time'].strftime('%H:%M')}"
+
+    if not timings_text:
+        timings_text = "\n- Тайминги еще не настроены."
+
+    await state.set_state(CampaignStates.timing_select_days)
+    await state.update_data(campaign_id=campaign_id, selected_days=[])
+
+    options = [(day, str(i)) for i, day in enumerate(days_of_week)]
+    data = await state.get_data()
+    selected_days = data.get('selected_days', [])
+
+    keyboard = get_multiselect_keyboard(
+        options=options,
+        selected_values=selected_days,
+        done_callback=f"timing_days_done:{campaign_id}",
+        back_callback=f"campaign_view:{campaign_id}"
+    )
+
+    message_text = (
+        f"**🗓️ Настройка Времени Постинга для '{campaign_name}'**\n"
+        f"\n**Текущие настройки:**{timings_text}\n\n"
+        "Выберите дни, для которых вы хотите установить или изменить время. "
+        "Нажмите 'Готово', когда закончите выбор."
+    )
+
+    if isinstance(query_or_message, CallbackQuery):
+        await message.edit_text(message_text, reply_markup=keyboard)
+        await query_or_message.answer()
     else:
-        timings_text += "Тайминги не заданы.\n"
+        await message.answer(message_text, reply_markup=keyboard)
+
+
+@router.callback_query(F.data.startswith("select_toggle:"), CampaignStates.timing_select_days)
+async def toggle_day_selection(callback: CallbackQuery, state: FSMContext):
+    """Toggles the selection of a day in the timing multi-select."""
+    day_index_to_toggle = callback.data.split(":")[1]
+
+    data = await state.get_data()
+    selected_days = data.get('selected_days', [])
+
+    if day_index_to_toggle in selected_days:
+        selected_days.remove(day_index_to_toggle)
+    else:
+        selected_days.append(day_index_to_toggle)
+
+    await state.update_data(selected_days=selected_days)
+
+    campaign_id = data['campaign_id']
+    days_of_week = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+    options = [(day, str(i)) for i, day in enumerate(days_of_week)]
+
+    keyboard = get_multiselect_keyboard(
+        options=options,
+        selected_values=selected_days,
+        done_callback=f"timing_days_done:{campaign_id}",
+        back_callback=f"campaign_view:{campaign_id}"
+    )
+
+    await callback.message.edit_reply_markup(reply_markup=keyboard)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "select_all_toggle", CampaignStates.timing_select_days)
+async def toggle_select_all_days(callback: CallbackQuery, state: FSMContext):
+    """Toggles the selection of all days."""
+    data = await state.get_data()
+    selected_days = data.get('selected_days', [])
+    days_of_week = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+    all_day_indices = [str(i) for i in range(len(days_of_week))]
+
+    if len(selected_days) == len(all_day_indices):
+        new_selected_days = []
+    else:
+        new_selected_days = all_day_indices
+
+    await state.update_data(selected_days=new_selected_days)
+
+    campaign_id = data['campaign_id']
+    options = [(day, str(i)) for i, day in enumerate(days_of_week)]
+
+    keyboard = get_multiselect_keyboard(
+        options=options,
+        selected_values=new_selected_days,
+        done_callback=f"timing_days_done:{campaign_id}",
+        back_callback=f"campaign_view:{campaign_id}"
+    )
+
+    await callback.message.edit_reply_markup(reply_markup=keyboard)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("timing_days_done:"), CampaignStates.timing_select_days)
+async def timing_days_done(callback: CallbackQuery, state: FSMContext):
+    """Handles completion of day selection and asks for start time."""
+    data = await state.get_data()
+    selected_days = data.get('selected_days', [])
+
+    if not selected_days:
+        await callback.answer("⚠️ Пожалуйста, выберите хотя бы один день.", show_alert=True)
+        return
+
+    await state.set_state(CampaignStates.timing_input_start)
+    
+    days_of_week = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+    selected_day_names = [days_of_week[int(i)] for i in selected_days]
 
     await callback.message.edit_text(
-        f"**Установка таймингов (2.4)**\n\n{timings_text}\n\n"
-        "Выберите **день недели** для добавления или изменения интервала:",
-        reply_markup=get_day_select_keyboard(campaign_id)
+        f"**🕒 Выбраны дни:** {', '.join(selected_day_names)}\n\n"
+        "Теперь введите **время начала** для этих дней.\n"
+        "Формат: **HH:MM** (например, 09:00)",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data=f"campaign_edit_timings:{data['campaign_id']}")]
+        ])
     )
     await callback.answer()
 
-@router.callback_query(F.data.startswith("timing_day:"), CampaignStates.campaign_timing_select_day)
-async def timing_select_day(callback: CallbackQuery, state: FSMContext):
-    """Обрабатывает выбор дня недели и просит ввести время начала."""
-    _, day_index_str, campaign_id_str = callback.data.split(":")
-    day_index = int(day_index_str)
-    day_name = DAYS_MAPPING[day_index]
 
-    # Сохраняем выбранный день и переходим к вводу времени начала
-    await state.update_data(timing_setup={'day_index': day_index, 'day_name': day_name})
-    await state.set_state(CampaignStates.campaign_timing_input_start)
-
-    await callback.message.edit_text(
-        f"Выбран день: **{day_name}**.\n\n"
-        "Введите **время начала** постинга в формате ЧЧ:ММ (например, 10:30):"
-    )
-    await callback.answer()
-
-@router.message(CampaignStates.campaign_timing_input_start, F.text)
+@router.message(CampaignStates.timing_input_start, F.text)
 async def timing_input_start(message: Message, state: FSMContext):
-    """Обрабатывает ввод времени начала и просит ввести время окончания."""
+    """Inputs start time for selected days."""
     start_time_str = message.text.strip()
-
     try:
-        # Проверяем формат времени
-        start_time_obj = datetime.strptime(start_time_str, "%H:%M").time()
+        # Validate format, but don't store the object
+        datetime.strptime(start_time_str, "%H:%M").time()
+        await state.update_data(start_time=start_time_str)  # Store the string
+        await state.set_state(CampaignStates.timing_input_end)
+        await message.answer(f"✅ Время начала: **{start_time_str}**. Теперь введите **время окончания** (HH:MM):")
     except ValueError:
-        await message.answer("⚠️ Неверный формат времени. Введите в формате ЧЧ:ММ (например, 10:30).")
-        return
+        await message.answer("❌ Неверный формат времени. Введите время в формате **HH:MM** (например, 09:00):")
 
-    data = await state.get_data()
-    timing_setup = data['timing_setup']
-    timing_setup['start_time'] = start_time_str
 
-    await state.update_data(timing_setup=timing_setup)
-    await state.set_state(CampaignStates.campaign_timing_input_end)
-
-    await message.answer(
-        f"Время начала: **{start_time_str}**.\n\n"
-        "Введите **время окончания** постинга в формате ЧЧ:ММ (например, 18:00):"
-    )
-
-@router.message(CampaignStates.campaign_timing_input_end, F.text)
+@router.message(CampaignStates.timing_input_end, F.text)
 async def timing_input_end(message: Message, state: FSMContext):
-    """Обрабатывает ввод времени окончания и сохраняет тайминг."""
-    end_time_str = message.text.strip()
-
-    try:
-        # Проверяем формат времени
-        end_time_obj = datetime.strptime(end_time_str, "%H:%M").time()
-    except ValueError:
-        await message.answer("⚠️ Неверный формат времени. Введите в формате ЧЧ:ММ (например, 18:00).")
-        return
-
+    """Inputs end time and saves timing for all selected days."""
     data = await state.get_data()
-    timing_setup = data['timing_setup']
-    campaign_id = data['current_campaign_id']
-
-    # Проверка, что время начала раньше времени окончания
-    start_time_obj = datetime.strptime(timing_setup['start_time'], "%H:%M").time()
-    if end_time_obj <= start_time_obj:
-        await message.answer("⚠️ Время окончания должно быть позже времени начала.")
-        return
-
-    # Сохранение тайминга (2.4)
     campaign_mgr = get_campaign_manager()
-    if campaign_mgr:
-        await campaign_mgr.save_timing(
-            campaign_id=campaign_id,
-            day=timing_setup['day_index'],
-            start_time=start_time_obj,
-            end_time=end_time_obj
+    campaign_id = data['campaign_id']
+    selected_days_indices = data.get('selected_days', [])
+
+    end_time_str = message.text.strip()
+    try:
+        end_time_obj = datetime.strptime(end_time_str, "%H:%M").time()
+        # Retrieve the string and convert it to a time object now
+        start_time_str = data['start_time']
+        start_time_obj = datetime.strptime(start_time_str, "%H:%M").time()
+
+        if end_time_obj <= start_time_obj:
+            await message.answer("❌ Время окончания должно быть позже времени начала. Попробуйте снова:")
+            return
+
+        # Save timing for each selected day
+        for day_index_str in selected_days_indices:
+            await campaign_mgr.save_timing(
+                campaign_id=campaign_id,
+                day=int(day_index_str),
+                start_time=start_time_obj,
+                end_time=end_time_obj
+            )
+        
+        days_of_week = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+        selected_day_names = [days_of_week[int(i)] for i in selected_days_indices]
+
+        await message.answer(
+            f"✅ Тайминги для **{', '.join(selected_day_names)}** сохранены: **{start_time_obj.strftime('%H:%M')} - {end_time_obj.strftime('%H:%M')}**."
         )
 
-    await message.answer(
-        f"✅ Тайминг для **{timing_setup['day_name']}** успешно установлен: с {timing_setup['start_time']} до {end_time_str}."
-    )
+        await state.clear()
+        await edit_campaign_timings(message, state, campaign_id)
 
-    # Сброс FSM для таймингов и возврат в меню выбора дня
-    await state.set_state(CampaignStates.campaign_timing_select_day)
+    except ValueError:
+        await message.answer("❌ Неверный формат времени. Введите время в формате **HH:MM** (например, 23:30):")
+    except Exception as e:
+        bot_logger.log_error("Manage Module", e, f"Ошибка при сохранении времени окончания для кампании {campaign_id}")
+        await message.answer("Произошла ошибка при сохранении. Попробуйте позже.")
+        await state.clear()
 
-    # Переоткрываем меню выбора дня, чтобы показать обновленные тайминги
-    # Имитируем нажатие кнопки 'campaign_timing:start'
-    temp_callback_data = f"campaign_timing:start:{campaign_id}"
-    await start_timing_setup(message, state) # Перезапуск отображения
+# REMOVED: Old timing handlers: start_timing_setup, timing_select_day, timing_input_start, timing_input_end
 
-@router.callback_query(F.data.startswith("campaign_delete:"))
-async def confirm_delete_campaign(callback: CallbackQuery):
-    """Запрашивает подтверждение перед удалением."""
+# --- IMPROVED DELETE WORKFLOW ---
+
+@router.callback_query(F.data.startswith("campaign_delete_confirm:"))
+async def confirm_delete_campaign(callback: CallbackQuery, state: FSMContext):
+    """Asks for final confirmation before deleting a campaign."""
     campaign_id = int(callback.data.split(":")[1])
 
     # 1. Получаем имя для подтверждения
@@ -303,20 +392,23 @@ async def confirm_delete_campaign(callback: CallbackQuery):
         await callback.answer("❌ Кампания не найдена.", show_alert=True)
         return
 
+    await state.set_state(CampaignStates.delete_confirmation)
+    await state.update_data(campaign_id=campaign_id)
+
     await callback.message.edit_text(
         f"⚠️ **ВНИМАНИЕ!** Вы уверены, что хотите удалить кампанию **'{campaign['name']}'** и все ее тайминги?\n"
         "Это действие необратимо!",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Да, удалить окончательно", callback_data=f"campaign_final_delete:{campaign_id}")],
+            [InlineKeyboardButton(text="✅ Да, удалить окончательно", callback_data=f"campaign_delete_finalize:{campaign_id}")],
             [InlineKeyboardButton(text="⬅️ Отмена", callback_data=f"campaign_edit:{campaign_id}")]
         ])
     )
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("campaign_final_delete:"))
+@router.callback_query(F.data.startswith("campaign_delete_finalize:"), CampaignStates.delete_confirmation)
 async def finalize_delete_campaign(callback: CallbackQuery, state: FSMContext):
-    """Выполняет удаление кампании."""
+    """Deletes the campaign after checking the state."""
     campaign_id = int(callback.data.split(":")[1])
 
     # 1. Получаем имя для логирования

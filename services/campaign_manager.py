@@ -131,7 +131,7 @@ class CampaignManager:
 
     async def get_timings(self, campaign_id: int) -> List[Dict]:
         """Получает все тайминги для кампании."""
-        query = "SELECT day_of_week, start_time::text, end_time::text FROM campaign_timings WHERE campaign_id = $1 ORDER BY day_of_week, start_time;"
+        query = "SELECT day_of_week, start_time, end_time FROM campaign_timings WHERE campaign_id = $1 ORDER BY day_of_week, start_time;"
         async with self.db_pool.acquire() as conn:
             records = await conn.fetch(query, campaign_id)
             return [dict(r) for r in records]
