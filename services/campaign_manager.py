@@ -192,7 +192,7 @@ class CampaignManager:
 
         return campaigns
 
-    async def get_conflicting_campaigns(self, campaign_id: int, day_of_week: int, current_time: str) -> List[str]:
+    async def get_conflicting_campaigns(self, campaign_id: int, day_of_week: int, current_time: Any) -> List[str]:
         """
         Проверяет, есть ли другая запущенная кампания (status='running', id != campaign_id),
         которая имеет активный тайминг в текущее время И имеет общий канал.
@@ -205,13 +205,13 @@ class CampaignManager:
         if not current_channels: return []
 
         # 2. Convert time to time object for database query
-        from datetime import datetime
         if isinstance(current_time, str):
             current_time_obj = datetime.strptime(current_time, "%H:%M").time()
-        elif isinstance(current_time, datetime.time):
+        elif isinstance(current_time, time):
             current_time_obj = current_time
         else:
-            raise ValueError(f"current_time must be str or datetime.time, got {type(current_time)}")
+            # Fallback for safety, although it should be a time object from the scheduler
+            current_time_obj = datetime.now().time()
 
         # 3. Запрос ID запущенных кампаний, активных сейчас (по таймингу)
         active_timing_ids_query = """
@@ -221,7 +221,7 @@ class CampaignManager:
         AND $2 < end_time;
         """
 
-        # 3. Запрос всех запущенных кампаний (кроме текущей)
+        # 4. Запрос всех запущенных кампаний (кроме текущей)
         running_campaigns_query = "SELECT id, name, params FROM campaigns WHERE status = 'running' AND id != $1;"
 
         async with self.db_pool.acquire() as conn:
@@ -231,7 +231,20 @@ class CampaignManager:
 
             conflicting_channels = set()
 
-            running_campaigns = await conn.fetch(running_campaigns_query, campaign_id)
+            running_campaigns_records = await conn.fetch(running_campaigns_query, campaign_id)
+            
+            # Parse params from JSON string to dict
+            import json
+            running_campaigns = []
+            for r in running_campaigns_records:
+                campaign = dict(r)
+                if isinstance(campaign.get('params'), str):
+                    try:
+                        campaign['params'] = json.loads(campaign['params'])
+                    except json.JSONDecodeError:
+                        campaign['params'] = {}
+                running_campaigns.append(campaign)
+
 
             for rc in running_campaigns:
                 # Проверяем, активна ли эта кампания в текущее время
