@@ -1,6 +1,6 @@
 # services/campaign_manager.py
 from typing import List, Dict, Any
-from datetime import datetime
+from datetime import datetime, time
 from db.postgres import db_pool # Используем глобальный пул
 import asyncpg
 
