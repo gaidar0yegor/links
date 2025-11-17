@@ -210,8 +210,7 @@ class CampaignManager:
         elif isinstance(current_time, time):
             current_time_obj = current_time
         else:
-            # Fallback for safety, although it should be a time object from the scheduler
-            current_time_obj = datetime.now().time()
+            raise ValueError(f"current_time must be str or time, got {type(current_time)}")
 
         # 3. Запрос ID запущенных кампаний, активных сейчас (по таймингу)
         active_timing_ids_query = """
