@@ -286,38 +286,114 @@ async def done_select_all_subcategories(callback: CallbackQuery, state: FSMConte
 
 @router.callback_query(F.data == "campaign_done_rating", CampaignStates.campaign_new_select_rating)
 async def done_select_rating(callback: CallbackQuery, state: FSMContext):
-    """Обрабатывает завершение выбора рейтинга и переходит к Шагу 5: Язык."""
+    """Обрабатывает завершение выбора рейтинга и переходит к Шагу 5: Мин. цена."""
     data = await state.get_data()
-    selected_ratings = data['new_campaign']['ratings'] # Будет сохранено общим хэндлером
+    selected_ratings = data['new_campaign'].get('ratings', [])
 
     if not selected_ratings:
         await callback.answer("⚠️ Выберите хотя бы один минимальный рейтинг.", show_alert=True)
         return
 
-    # Нормализуем данные: выбираем максимальный рейтинг как единый параметр
-    max_rating = max(selected_ratings)
-
+    max_rating = max(float(r) for r in selected_ratings)
     new_campaign = data['new_campaign']
     new_campaign['rating'] = max_rating
-
     await state.update_data(new_campaign=new_campaign)
-    await state.set_state(CampaignStates.campaign_new_select_language)
 
-    # Опции языка (предполагаем, что они в Google Sheets или заданы жестко)
-    language_options = await get_options_from_gsheets("languages") # languages - новая таблица
+    await state.set_state(CampaignStates.campaign_new_input_min_price)
 
     await callback.message.edit_text(
-        f"**ШАГ 5/N: Выбор языка объявлений**\n\nТекущий минимальный рейтинг: **{max_rating}**\n\nВыберите язык:",
+        f"**ШАГ 5: Минимальная цена**\n\n"
+        f"Текущий минимальный рейтинг: **{max_rating}**\n\n"
+        "Введите минимальную цену для товаров (например, `25` для €25). "
+        "Отправьте `0`, чтобы пропустить."
+    )
+    await callback.answer()
+
+
+@router.message(CampaignStates.campaign_new_input_min_price, F.text)
+async def input_min_price(message: Message, state: FSMContext):
+    """Обрабатывает ввод мин. цены и переходит к Шагу 6: Мин. скидка."""
+    try:
+        min_price = float(message.text.strip())
+        if min_price < 0:
+            raise ValueError("Price cannot be negative")
+
+        data = await state.get_data()
+        new_campaign = data['new_campaign']
+        new_campaign['min_price'] = min_price if min_price > 0 else None
+        await state.update_data(new_campaign=new_campaign)
+
+        await state.set_state(CampaignStates.campaign_new_input_min_saving_percent)
+
+        await message.answer(
+            "**ШАГ 6: Минимальная скидка (%)**\n\n"
+            "Введите минимальный процент скидки (например, `10` для 10%). "
+            "Отправьте `0`, чтобы пропустить."
+        )
+
+    except ValueError:
+        await message.answer("❌ Введите корректное число (например, `25` или `0`).")
+
+
+@router.message(CampaignStates.campaign_new_input_min_saving_percent, F.text)
+async def input_min_saving_percent(message: Message, state: FSMContext):
+    """Обрабатывает ввод мин. скидки и переходит к Шагу 7: FBA."""
+    try:
+        min_saving = int(message.text.strip())
+        if not (0 <= min_saving <= 100):
+            raise ValueError("Percentage must be between 0 and 100")
+
+        data = await state.get_data()
+        new_campaign = data['new_campaign']
+        new_campaign['min_saving_percent'] = min_saving if min_saving > 0 else None
+        await state.update_data(new_campaign=new_campaign)
+
+        await state.set_state(CampaignStates.campaign_new_select_fba)
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Да", callback_data="fba:yes")],
+            [InlineKeyboardButton(text="Нет", callback_data="fba:no")],
+            [InlineKeyboardButton(text="Неважно", callback_data="fba:skip")]
+        ])
+        await message.answer(
+            "**ШАГ 7: Fulfilled By Amazon (FBA)**\n\n"
+            "Искать только товары, доставляемые Amazon?",
+            reply_markup=keyboard
+        )
+
+    except ValueError:
+        await message.answer("❌ Введите корректное число от 0 до 100.")
+
+
+@router.callback_query(F.data.startswith("fba:"), CampaignStates.campaign_new_select_fba)
+async def select_fba(callback: CallbackQuery, state: FSMContext):
+    """Обрабатывает выбор FBA и переходит к Шагу 8: Язык."""
+    choice = callback.data.split(":")[1]
+    fba_status = {
+        'yes': True,
+        'no': False,
+        'skip': None
+    }.get(choice)
+
+    data = await state.get_data()
+    new_campaign = data['new_campaign']
+    new_campaign['fulfilled_by_amazon'] = fba_status
+    await state.update_data(new_campaign=new_campaign)
+
+    await state.set_state(CampaignStates.campaign_new_select_language)
+
+    language_options = await get_options_from_gsheets("languages")
+    await callback.message.edit_text(
+        "**ШАГ 8: Выбор языка объявлений**\n\nВыберите язык:",
         reply_markup=get_multiselect_keyboard(
             options=language_options,
-            selected_values=[], # Тут можно было бы использовать SingleSelect, но используем Multiselect для унификации
+            selected_values=[],
             done_callback="campaign_done_language",
-            back_callback="campaign_done_rating" # Назад к выбору рейтинга
+            back_callback="campaign_done_rating" # Allows going back to rating
         )
     )
     await callback.answer()
 
-# --- Шаг 6: Ввод Названия (2.3.2.6) ---
 
 @router.callback_query(F.data == "campaign_done_language", CampaignStates.campaign_new_select_language)
 async def done_select_language(callback: CallbackQuery, state: FSMContext):
@@ -391,6 +467,9 @@ async def input_campaign_name(message: Message, state: FSMContext):
 
     summary += f"""
     - **Мин. Рейтинг:** {new_campaign.get('rating', 'Не выбран')}
+    - **Мин. Цена:** €{new_campaign.get('min_price', 'Нет')}
+    - **Мин. Скидка:** {new_campaign.get('min_saving_percent', 'Нет')}%
+    - **FBA:** {new_campaign.get('fulfilled_by_amazon', 'Неважно')}
     - **Язык:** {new_campaign.get('language', 'Не выбран')}
 
     Вы готовы **СОХРАНИТЬ** кампанию?

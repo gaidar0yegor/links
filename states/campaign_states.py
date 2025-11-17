@@ -24,5 +24,10 @@ class CampaignStates(StatesGroup):
     timing_input_start = State()
     timing_input_end = State()
 
+    # New states for advanced filters
+    campaign_new_input_min_price = State()
+    campaign_new_input_min_saving_percent = State()
+    campaign_new_select_fba = State()
+
     # State for delete confirmation
     delete_confirmation = State()

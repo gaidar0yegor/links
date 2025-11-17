@@ -74,6 +74,10 @@ class CampaignManager:
             'min_rating': campaign_data.get('rating'),
             'language': campaign_data.get('language'),
             'browse_node_ids': campaign_data.get('browse_node_ids', []),
+            # Add new filters
+            'min_price': campaign_data.get('min_price'),
+            'min_saving_percent': campaign_data.get('min_saving_percent'),
+            'fulfilled_by_amazon': campaign_data.get('fulfilled_by_amazon'),
         }
 
         import json

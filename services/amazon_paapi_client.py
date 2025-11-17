@@ -90,20 +90,30 @@ class AmazonPAAPIClient:
             bot_logger.log_info("AmazonPAAPIClient", "Using Google Sheets fallback for product data")
             return self._get_sheets_fallback_data(keywords, min_rating, browse_node_ids)
 
-        # Set default filters if none provided
-        if filters is None:
-            filters = {
-                "MinPrice": 10.00,
-                "MinSavingPercent": 5,
-                "MinReviewsRating": max(min_rating, 3.5),
-                "FulfilledByAmazon": True
-            }
+        # Set default filters and merge with provided ones
+        final_filters = {
+            "MinPrice": 10.00,
+            "MinSavingPercent": 5,
+            "MinReviewsRating": max(min_rating, 3.5),
+            "FulfilledByAmazon": True
+        }
+        if filters:
+            # Filters passed from the campaign will override defaults.
+            # `None` values mean the filter should be skipped.
+            for key, value in filters.items():
+                if value is not None:
+                    final_filters[key] = value
+                elif key in final_filters:
+                    del final_filters[key]
 
         try:
-            if PAAPI_AVAILABLE == "python_amazon_paapi":
+            if PAAPI_AVAILABLE == "python_python_amazon_paapi":
+                # Use paapi5_python_sdk with advanced search
+                return await self._advanced_search_api(keywords, final_filters)
+            elif PAAPI_AVAILABLE == "python_amazon_paapi":
                 # Use python-amazon-paapi with browse node search if available
                 if browse_node_ids:
-                    return self._browse_node_search_api(browse_node_ids, keywords, min_rating, filters)
+                    return self._browse_node_search_api(browse_node_ids, keywords, min_rating, final_filters)
                 else:
                     return self._basic_search_api(keywords, min_rating)
 

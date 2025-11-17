@@ -117,6 +117,15 @@ class PostManager:
                 subcategories = params.get('subcategories', [])
                 min_rating = float(params.get('min_rating', 0.0))
 
+                # Build filters from campaign params
+                filters = {}
+                if params.get('min_price'):
+                    filters['MinPrice'] = params['min_price']
+                if params.get('min_saving_percent'):
+                    filters['MinSavingPercent'] = params['min_saving_percent']
+                if params.get('fulfilled_by_amazon') is not None:
+                    filters['FulfilledByAmazon'] = params['fulfilled_by_amazon']
+
                 keywords_parts = []
                 if categories:
                     keywords_parts.extend(categories)
@@ -130,6 +139,7 @@ class PostManager:
                 product_data = await amazon_paapi_client.search_items(
                     keywords=keywords,
                     min_rating=min_rating,
+                    filters=filters,
                     browse_node_ids=browse_node_ids if browse_node_ids else None
                 )
 
