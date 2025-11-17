@@ -72,7 +72,7 @@ class AmazonPAAPIClient:
                 bot_logger.log_error("AmazonPAAPIClient", e, "Failed to initialize PAAPI client")
                 self.api_client = None
 
-    async def search_items(self, keywords: str, min_rating: float = 0.0, filters: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    async def search_items(self, keywords: str, min_rating: float = 0.0, filters: Optional[Dict[str, Any]] = None, browse_node_ids: Optional[List[str]] = None) -> Optional[Dict[str, Any]]:
         """
         Advanced search for products using Amazon PA API 5.0 with sophisticated filtering.
 
@@ -80,6 +80,7 @@ class AmazonPAAPIClient:
             keywords: Search keywords
             min_rating: Minimum rating filter
             filters: Advanced filters dictionary
+            browse_node_ids: List of browse node IDs to search within
 
         Returns:
             Product data dictionary or None if error
@@ -87,7 +88,7 @@ class AmazonPAAPIClient:
         # If Amazon API is disabled or SDK not available, use fallback
         if not self.use_amazon_api or not PAAPI_AVAILABLE or not self.api_client:
             bot_logger.log_info("AmazonPAAPIClient", "Using Google Sheets fallback for product data")
-            return self._get_sheets_fallback_data(keywords, min_rating)
+            return self._get_sheets_fallback_data(keywords, min_rating, browse_node_ids)
 
         # Set default filters if none provided
         if filters is None:
@@ -100,12 +101,15 @@ class AmazonPAAPIClient:
 
         try:
             if PAAPI_AVAILABLE == "python_amazon_paapi":
-                # Use python-amazon-paapi with basic search
-                return self._basic_search_api(keywords, min_rating)
+                # Use python-amazon-paapi with browse node search if available
+                if browse_node_ids:
+                    return self._browse_node_search_api(browse_node_ids, keywords, min_rating, filters)
+                else:
+                    return self._basic_search_api(keywords, min_rating)
 
         except Exception as e:
             bot_logger.log_error("AmazonPAAPIClient", e, f"Unexpected error for keywords: {keywords}")
-            return self._get_sheets_fallback_data(keywords, min_rating)
+            return self._get_sheets_fallback_data(keywords, min_rating, browse_node_ids)
 
     async def _advanced_search_api(self, keywords: str, filters: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Advanced search using SearchItems + GetItems enrichment."""
@@ -300,6 +304,69 @@ class AmazonPAAPIClient:
             "SalesRank": str(sales_rank),
             "Description": description
         }
+
+    def _browse_node_search_api(self, browse_node_ids: List[str], keywords: str, min_rating: float, filters: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Search within specific browse nodes using Amazon PA API."""
+        try:
+            # Try each browse node until we find products
+            for node_id in browse_node_ids:
+                try:
+                    search_items_request = SearchItemsRequest(
+                        partner_tag=self.associate_tag,
+                        partner_type=PartnerType.ASSOCIATES,
+                        marketplace="www.amazon.it",
+                        browse_node_id=node_id,
+                        keywords=keywords if keywords else None,
+                        search_index="All",
+                        item_count=5,
+                        min_reviews_rating=max(min_rating, 3.5),
+                        resources=[
+                            SearchItemsResource.ITEMINFO_TITLE,
+                            SearchItemsResource.OFFERS_LISTINGS_PRICE,
+                            SearchItemsResource.IMAGES_PRIMARY_LARGE,
+                            SearchItemsResource.ITEMINFO_FEATURES,
+                            SearchItemsResource.ITEMINFO_PRODUCTINFO,
+                        ],
+                    )
+
+                    # Apply additional filters
+                    if filters.get("MinPrice"):
+                        search_items_request.min_price = int(filters["MinPrice"] * 100)  # Convert to cents
+                    if filters.get("MinSavingPercent"):
+                        search_items_request.min_saving_percent = filters["MinSavingPercent"]
+
+                    response = self.api_client.search_items(search_items_request)
+
+                    if response.search_result and response.search_result.items:
+                        item = response.search_result.items[0]
+                        product_data = self._extract_product_data(item)
+                        bot_logger.log_info("AmazonPAAPIClient",
+                                          f"Found product in browse node {node_id}: {product_data.get('Title', 'Unknown')}")
+                        return product_data
+
+                    # Rate limiting between node searches
+                    import asyncio
+                    asyncio.sleep(0.2)
+
+                except ApiException as e:
+                    bot_logger.log_error("AmazonPAAPIClient",
+                                       Exception(f"Browse node search API Error: {e.reason}"),
+                                       f"Node ID: {node_id}, Keywords: {keywords}")
+                    continue
+                except Exception as e:
+                    bot_logger.log_error("AmazonPAAPIClient", e,
+                                       f"Browse node search failed for node {node_id}, keywords: {keywords}")
+                    continue
+
+            # No products found in any browse node
+            bot_logger.log_info("AmazonPAAPIClient",
+                              f"No products found in browse nodes {browse_node_ids} for keywords: {keywords}")
+            return None
+
+        except Exception as e:
+            bot_logger.log_error("AmazonPAAPIClient", e,
+                               f"Browse node search failed for nodes {browse_node_ids}, keywords: {keywords}")
+            return None
 
     def _basic_search_api(self, keywords: str, min_rating: float) -> Optional[Dict[str, Any]]:
         """Fallback to basic search for paapi5_python_sdk."""

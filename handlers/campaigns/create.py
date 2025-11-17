@@ -5,9 +5,9 @@ from aiogram.fsm.context import FSMContext
 from typing import List, Tuple
 from states.campaign_states import CampaignStates
 from services.sheets_api import sheets_api
-from services.campaign_manager import campaign_manager
+from services.campaign_manager import get_campaign_manager
 from handlers.campaigns.keyboards import get_multiselect_keyboard
-from handlers.main_menu import MainMenuCallback # Для кнопки "Назад"
+
 
 router = Router()
 # --- Вспомогательные функции ---
@@ -15,6 +15,14 @@ router = Router()
 # Эта функция будет вызываться, чтобы получить данные для мультивыбора из GS
 async def get_options_from_gsheets(sheet_name: str) -> List[Tuple[str, str]]:
     """Получает данные (Название, Значение/Callback) для кнопок."""
+    if sheet_name == "categories":
+        # Use new unified categories_subcategories table
+        categories = sheets_api.get_unique_categories()
+        return [(cat["name"], cat["name"]) for cat in categories]
+    elif sheet_name == "subcategories":
+        # This will be handled dynamically based on selected categories
+        return []
+
     data = sheets_api.get_sheet_data(sheet_name)
     # Предполагаем, что первая колонка - Название, вторая - Значение (если нужно)
     # Для каналов: [('Channel A', 'channel_a_id'), ('Channel B', 'channel_b_id')]
@@ -125,7 +133,7 @@ async def start_new_campaign(callback: CallbackQuery, state: FSMContext):
     )
     await callback.answer()
 
-# --- Шаг 2: Выбор Категории (2.3.2.2) ---
+# --- Шаг 2: Выбор Категорий (2.3.2.2) ---
 
 @router.callback_query(F.data == "campaign_done_channels", CampaignStates.campaign_new_select_channel)
 async def done_select_channels(callback: CallbackQuery, state: FSMContext):
@@ -139,12 +147,14 @@ async def done_select_channels(callback: CallbackQuery, state: FSMContext):
 
     await state.set_state(CampaignStates.campaign_new_select_category)
 
-    # 1. Загрузка опций из объединенной таблицы product_categories
-    options = await get_options_from_gsheets("product_categories")
+    # Load categories from new unified table
+    options = await get_options_from_gsheets("categories")
+    print(f"🔥 DEBUG: Loaded {len(options)} category options for Step 2")
 
     await callback.message.edit_text(
         "**🎯 ШАГ 2: Product Categories** (Мультивыбор)\n\n"
-        "📦 Выберите категории и подкатегории товаров для поиска на Amazon:",
+        "📦 Выберите категории товаров для поиска на Amazon.\n"
+        "После выбора категорий вы сможете выбрать подкатегории для каждой:",
         reply_markup=get_multiselect_keyboard(
             options=options,
             selected_values=[], # Пока ничего не выбрано
@@ -154,12 +164,11 @@ async def done_select_channels(callback: CallbackQuery, state: FSMContext):
     )
     await callback.answer()
 
-# --- Шаг 3: Выбор Подкатегорий (2.3.2.3) ---
+# --- Шаг 3: Выбор Подкатегорий по Категориям (2.3.2.3) ---
 
-# TODO: Для упрощения, пока игнорируем зависимость от выбранных категорий
 @router.callback_query(F.data == "campaign_done_categories", CampaignStates.campaign_new_select_category)
 async def done_select_categories(callback: CallbackQuery, state: FSMContext):
-    """Обрабатывает завершение выбора категорий и переходит к Шагу 3: Подкатегории."""
+    """Обрабатывает завершение выбора категорий и начинает выбор подкатегорий."""
     data = await state.get_data()
     selected_categories = data['new_campaign']['categories']
 
@@ -167,55 +176,111 @@ async def done_select_categories(callback: CallbackQuery, state: FSMContext):
         await callback.answer("⚠️ Необходимо выбрать хотя бы одну категорию!", show_alert=True)
         return
 
+    # Initialize subcategories selection
+    await state.update_data(
+        new_campaign={
+            **data['new_campaign'],
+            'subcategories': {},
+            'current_category_index': 0
+        }
+    )
+
+    # Start with first category
+    await show_subcategories_for_category(callback, state)
+
+async def show_subcategories_for_category(callback: CallbackQuery, state: FSMContext):
+    """Показывает подкатегории для текущей категории."""
+    data = await state.get_data()
+    selected_categories = data['new_campaign']['categories']
+    current_index = data['new_campaign'].get('current_category_index', 0)
+    subcategories_data = data['new_campaign'].get('subcategories', {})
+
+    if current_index >= len(selected_categories):
+        # All categories processed, move to next step
+        await done_select_all_subcategories(callback, state)
+        return
+
+    current_category = selected_categories[current_index]
+    subcategories = sheets_api.get_subcategories_for_category(current_category)
+
+    if not subcategories:
+        # No subcategories for this category, skip to next
+        await state.update_data(
+            new_campaign={
+                **data['new_campaign'],
+                'current_category_index': current_index + 1
+            }
+        )
+        await show_subcategories_for_category(callback, state)
+        return
+
+    # Convert to options format
+    options = [(sub['name'], sub['name']) for sub in subcategories]
+    selected_subs = subcategories_data.get(current_category, [])
+
+    progress_text = f"**Категория {current_index + 1}/{len(selected_categories)}: {current_category}**\n\n"
+    progress_text += "Выберите подкатегории (или 'Выбрать все' для всей категории):"
+
     await state.set_state(CampaignStates.campaign_new_select_subcategory)
 
-    # 1. Загрузка опций (Из таблицы subcategories)
-    # TODO: Реализовать динамическую загрузку, но пока просто загружаем все
-    options = await get_options_from_gsheets("subcategories")
-
     await callback.message.edit_text(
-        "**ШАГ 3/N: Выбор подкатегорий** (Мультивыбор)\n\nВыберите подкатегории товаров (опция 'Выбрать все' доступна):",
+        f"**🎯 ШАГ 3: Подкатегории** (Мультивыбор)\n\n{progress_text}",
         reply_markup=get_multiselect_keyboard(
             options=options,
-            selected_values=[], # Пока ничего не выбрано
-            done_callback="campaign_done_subcategories",
-            back_callback="campaign_done_channels" # Вернуться к выбору категорий
+            selected_values=selected_subs,
+            done_callback=f"campaign_done_subcategories:{current_category}",
+            back_callback="campaign_done_channels"
         )
     )
     await callback.answer()
 
-# --- Шаг 4: Выбор Рейтинга (2.3.2.4) ---
+@router.callback_query(F.data.startswith("campaign_done_subcategories:"), CampaignStates.campaign_new_select_subcategory)
+async def done_select_subcategories_for_category(callback: CallbackQuery, state: FSMContext):
+    """Обрабатывает завершение выбора подкатегорий для текущей категории."""
+    category_name = callback.data.split(":", 1)[1]
 
-@router.callback_query(F.data == "campaign_done_subcategories", CampaignStates.campaign_new_select_subcategory)
-async def done_select_subcategories(callback: CallbackQuery, state: FSMContext):
-    """Обрабатывает завершение выбора подкатегорий и переходит к Шагу 4: Рейтинг."""
     data = await state.get_data()
-    selected_subcategories = data['new_campaign']['subcategories']
+    current_index = data['new_campaign'].get('current_category_index', 0)
+    subcategories_data = data['new_campaign'].get('subcategories', {})
 
-    # Если нет подкатегорий, это не критично, но лучше предупредить
-    if not selected_subcategories:
-        await callback.answer("⚠️ Подкатегории не выбраны. Кампания будет работать без фильтрации по подкатегориям.", show_alert=True)
-        # return # Продолжаем, так как это не обязательное поле по ТЗ
+    # Get selected subcategories for this category
+    selected_subs = subcategories_data.get(category_name, [])
 
+    # Save selection and move to next category
+    await state.update_data(
+        new_campaign={
+            **data['new_campaign'],
+            'current_category_index': current_index + 1
+        }
+    )
+
+    await show_subcategories_for_category(callback, state)
+
+async def done_select_all_subcategories(callback: CallbackQuery, state: FSMContext):
+    """Все подкатегории выбраны, переходим к следующему шагу."""
     await state.set_state(CampaignStates.campaign_new_select_rating)
 
     # Опции рейтинга
     rating_options = [
-        ("4.0+ звёзд", "4.0"), # Значение - минимальный рейтинг
+        ("4.0+ звёзд", "4.0"),
         ("4.5+ звёзд", "4.5"),
         ("5.0 звёзд", "5.0")
     ]
 
     await callback.message.edit_text(
-        "**ШАГ 4/N: Выбор рейтинга** (Мультивыбор, минимальный)\n\nВыберите минимальный рейтинг товара:",
+        "**ШАГ 4: Выбор рейтинга** (Мультивыбор)\n\n"
+        "⭐ Выберите минимальный рейтинг товара:",
         reply_markup=get_multiselect_keyboard(
             options=rating_options,
             selected_values=[],
             done_callback="campaign_done_rating",
-            back_callback="campaign_done_categories" # Назад к выбору подкатегорий
+            back_callback="campaign_done_categories"
         )
     )
     await callback.answer()
+
+# --- REMOVED: Redundant handler that conflicts with subcategories flow ---
+# The subcategories selection now properly flows through done_select_all_subcategories()
 
 # --- Шаг 5: Выбор Языка (2.3.2.5) ---
 
@@ -247,7 +312,7 @@ async def done_select_rating(callback: CallbackQuery, state: FSMContext):
             options=language_options,
             selected_values=[], # Тут можно было бы использовать SingleSelect, но используем Multiselect для унификации
             done_callback="campaign_done_language",
-            back_callback="campaign_done_subcategories" # Назад к выбору рейтинга
+            back_callback="campaign_done_rating" # Назад к выбору рейтинга
         )
     )
     await callback.answer()
@@ -304,13 +369,27 @@ async def input_campaign_name(message: Message, state: FSMContext):
     await state.set_state(CampaignStates.campaign_new_review)
 
     # Выводим обзор параметров перед сохранением
+    subcategories_info = []
+    subcategories_data = new_campaign.get('subcategories', {})
+    for category, subs in subcategories_data.items():
+        if subs:
+            subcategories_info.append(f"{category}: {', '.join(subs)}")
+
     summary = f"""
     ✅ **Параметры кампании собраны:**
 
     - **Название:** {campaign_name}
     - **Каналы:** {', '.join(new_campaign.get('channels', []))}
     - **Категории:** {', '.join(new_campaign.get('categories', []))}
-    - **Подкатегории:** {len(new_campaign.get('subcategories', []))} выбрано
+    - **Подкатегории:** {len(subcategories_info)} категорий с подкатегориями
+    """
+
+    if subcategories_info:
+        summary += "      " + "\n      ".join(subcategories_info[:3])  # Show first 3
+        if len(subcategories_info) > 3:
+            summary += f"\n      ... и ещё {len(subcategories_info) - 3} категорий"
+
+    summary += f"""
     - **Мин. Рейтинг:** {new_campaign.get('rating', 'Не выбран')}
     - **Язык:** {new_campaign.get('language', 'Не выбран')}
 
@@ -347,8 +426,40 @@ async def toggle_selection(callback: CallbackQuery, state: FSMContext):
         key = 'categories'
         options_sheet = 'categories'
     elif current_state == CampaignStates.campaign_new_select_subcategory:
-        key = 'subcategories'
-        options_sheet = 'subcategories'
+        # Handle subcategories selection for current category
+        current_index = data['new_campaign'].get('current_category_index', 0)
+        selected_categories = data['new_campaign']['categories']
+        if current_index < len(selected_categories):
+            current_category = selected_categories[current_index]
+            subcategories_data = data['new_campaign'].get('subcategories', {})
+            selected_list = subcategories_data.get(current_category, [])
+
+            if value_to_toggle in selected_list:
+                selected_list.remove(value_to_toggle)
+            else:
+                selected_list.append(value_to_toggle)
+
+            subcategories_data[current_category] = selected_list
+            new_campaign['subcategories'] = subcategories_data
+            await state.update_data(new_campaign=new_campaign)
+
+            # Redraw keyboard for current category
+            subcategories = sheets_api.get_subcategories_for_category(current_category)
+            options = [(sub['name'], sub['name']) for sub in subcategories]
+
+            progress_text = f"**Категория {current_index + 1}/{len(selected_categories)}: {current_category}**\n\n"
+            progress_text += "Выберите подкатегории (или 'Выбрать все' для всей категории):"
+
+            await callback.message.edit_reply_markup(
+                reply_markup=get_multiselect_keyboard(
+                    options=options,
+                    selected_values=selected_list,
+                    done_callback=f"campaign_done_subcategories:{current_category}",
+                    back_callback="campaign_done_channels"
+                )
+            )
+        await callback.answer()
+        return
     elif current_state == CampaignStates.campaign_new_select_rating:
         key = 'ratings'
         options_sheet = 'ratings'  # This would be a hardcoded list, but we'll handle it differently
@@ -378,11 +489,11 @@ async def toggle_selection(callback: CallbackQuery, state: FSMContext):
             ("5.0 звёзд", "5.0")
         ]
         done_callback = "campaign_done_rating"
-        back_callback = "campaign_done_subcategories"
+        back_callback = "campaign_done_categories"
     elif key == 'languages':
         options = await get_options_from_gsheets(options_sheet)
         done_callback = "campaign_done_language"
-        back_callback = "campaign_done_subcategories"
+        back_callback = "campaign_done_rating"
     else:
         options = await get_options_from_gsheets(options_sheet)
         # Определяем нужный done_callback (для каждой кнопки он свой)
@@ -424,10 +535,42 @@ async def toggle_select_all(callback: CallbackQuery, state: FSMContext):
         done_callback = "campaign_done_categories"
         back_callback = "campaign_done_channels"
     elif current_state == CampaignStates.campaign_new_select_subcategory:
-        key = 'subcategories'
-        options_sheet = 'subcategories'
-        done_callback = "campaign_done_subcategories"
-        back_callback = "campaign_done_categories"
+        # Handle select all for current category subcategories
+        current_index = data['new_campaign'].get('current_category_index', 0)
+        selected_categories = data['new_campaign']['categories']
+        if current_index < len(selected_categories):
+            current_category = selected_categories[current_index]
+            subcategories = sheets_api.get_subcategories_for_category(current_category)
+            all_values = [sub['name'] for sub in subcategories]
+
+            subcategories_data = data['new_campaign'].get('subcategories', {})
+            selected_list = subcategories_data.get(current_category, [])
+
+            if len(selected_list) == len(all_values):
+                # If all selected, deselect all
+                subcategories_data[current_category] = []
+            else:
+                # Select all
+                subcategories_data[current_category] = all_values
+
+            new_campaign['subcategories'] = subcategories_data
+            await state.update_data(new_campaign=new_campaign)
+
+            # Redraw keyboard
+            options = [(sub['name'], sub['name']) for sub in subcategories]
+            progress_text = f"**Категория {current_index + 1}/{len(selected_categories)}: {current_category}**\n\n"
+            progress_text += "Выберите подкатегории (или 'Выбрать все' для всей категории):"
+
+            await callback.message.edit_reply_markup(
+                reply_markup=get_multiselect_keyboard(
+                    options=options,
+                    selected_values=subcategories_data[current_category],
+                    done_callback=f"campaign_done_subcategories:{current_category}",
+                    back_callback="campaign_done_channels"
+                )
+            )
+        await callback.answer()
+        return
     elif current_state == CampaignStates.campaign_new_select_rating:
         key = 'ratings'
         # Hardcoded options for rating
@@ -437,12 +580,12 @@ async def toggle_select_all(callback: CallbackQuery, state: FSMContext):
             ("5.0 звёзд", "5.0")
         ]
         done_callback = "campaign_done_rating"
-        back_callback = "campaign_done_subcategories"
+        back_callback = "campaign_done_categories"
     elif current_state == CampaignStates.campaign_new_select_language:
         key = 'languages'
         options_sheet = 'languages'
         done_callback = "campaign_done_language"
-        back_callback = "campaign_done_subcategories"
+        back_callback = "campaign_done_rating"
     else:
         await callback.answer("Ошибка состояния.", show_alert=True)
         return
@@ -484,30 +627,67 @@ async def finalize_and_save_campaign(callback: CallbackQuery, state: FSMContext)
     campaign_data = data['new_campaign']
 
     try:
-        # Add browse_node_id for each selected category
+        # Collect all selected subcategory node_ids for PA API search
+        selected_browse_nodes = []
+        subcategories_data = campaign_data.get('subcategories', {})
+
+        for category_name, subcategories in subcategories_data.items():
+            if subcategories:  # Only if subcategories were selected for this category
+                # Get node_ids for selected subcategories
+                all_subs = sheets_api.get_subcategories_for_category(category_name)
+                sub_dict = {sub['name']: sub['node_id'] for sub in all_subs}
+
+                for sub_name in subcategories:
+                    if sub_name in sub_dict:
+                        selected_browse_nodes.append(sub_dict[sub_name])
+
+        # If no subcategories selected, use category node_ids as fallback
+        if not selected_browse_nodes:
+            for category in campaign_data.get('categories', []):
+                categories_data = sheets_api.get_categories_subcategories()
+                for item in categories_data:
+                    if item['category'] == category:
+                        selected_browse_nodes.append(item['node_id_category'])
+                        break
+
+        # Remove duplicates
+        selected_browse_nodes = list(set(selected_browse_nodes))
+        campaign_data['browse_node_ids'] = selected_browse_nodes
+
+        # Legacy support - add categories_with_nodes for backward compatibility
         categories_with_nodes = []
         for category in campaign_data.get('categories', []):
-            browse_node = await get_browse_node_id(category)
+            categories_data = sheets_api.get_categories_subcategories()
+            category_node = None
+            for item in categories_data:
+                if item['category'] == category:
+                    category_node = item['node_id_category']
+                    break
+
             categories_with_nodes.append({
                 'name': category,
-                'browse_node_id': browse_node
+                'browse_node_id': category_node or '2892859031'  # Default fallback
             })
 
         campaign_data['categories_with_nodes'] = categories_with_nodes
 
         # Проверка уникальности
-        is_unique = await campaign_manager.is_name_unique(campaign_data['name'])
+        campaign_mgr = get_campaign_manager()
+        if campaign_mgr is None:
+            raise Exception("Campaign manager not initialized")
+        campaign_name = campaign_data['name']  # Store name before it gets popped
+        is_unique = await campaign_mgr.is_name_unique(campaign_name)
         if not is_unique:
-            await callback.answer(f"⚠️ Кампания с названием '{campaign_data['name']}' уже существует. Измените название.", show_alert=True)
+            await callback.answer(f"⚠️ Кампания с названием '{campaign_name}' уже существует. Измените название.", show_alert=True)
             # Возвращаемся на шаг ввода названия
             await state.set_state(CampaignStates.campaign_new_input_name)
             await callback.message.edit_text("Пожалуйста, введите другое, уникальное название для новой кампании:")
             return
 
-        campaign_id = await campaign_manager.save_new_campaign(campaign_data)
+        campaign_id = await campaign_mgr.save_new_campaign(campaign_data)
 
         await callback.message.edit_text(
-            f"🎉 Кампания **'{campaign_data['name']}'** успешно создана с ID: {campaign_id}.\n"
+            f"🎉 Кампания **'{campaign_name}'** успешно создана с ID: {campaign_id}.\n"
             f"Текущий статус: **Не выбраны тайминги**.\n\n"
             "Вы можете продолжить работу в Главном меню."
         )
@@ -515,7 +695,7 @@ async def finalize_and_save_campaign(callback: CallbackQuery, state: FSMContext)
         # Сброс FSM и переход в меню кампаний
         await state.clear()
         # Возвращаемся в меню кампаний, чтобы увидеть новую кампанию
-        await enter_campaign_module(callback)
+        await enter_campaign_module(callback, state)
 
     except Exception as e:
         await callback.message.edit_text(f"❌ Критическая ошибка при сохранении кампании: {e}")

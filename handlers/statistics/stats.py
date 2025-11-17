@@ -3,7 +3,7 @@ from aiogram import Router, F
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, Message, Document
 from aiogram.fsm.context import FSMContext
 from services.sheets_api import sheets_api
-from handlers.main_menu import MainMenuCallback
+
 import pandas as pd
 import io
 from datetime import datetime, timedelta

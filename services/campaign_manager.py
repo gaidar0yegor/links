@@ -70,9 +70,10 @@ class CampaignManager:
         params_json = {
             'channels': campaign_data.get('channels', []),
             'categories': campaign_data.get('categories', []),
-            'subcategories': campaign_data.get('subcategories', []),
+            'subcategories': campaign_data.get('subcategories', {}),
             'min_rating': campaign_data.get('rating'),
             'language': campaign_data.get('language'),
+            'browse_node_ids': campaign_data.get('browse_node_ids', []),
         }
 
         import json
@@ -91,8 +92,17 @@ class CampaignManager:
         async with self.db_pool.acquire() as conn:
             record = await conn.fetchrow(query, campaign_id)
             if record:
-                # Преобразуем record в словарь и возвращаем
-                return dict(record)
+                # Преобразуем record в словарь
+                campaign_dict = dict(record)
+                # Парсим JSON params если это строка
+                if isinstance(campaign_dict.get('params'), str):
+                    import json
+                    try:
+                        campaign_dict['params'] = json.loads(campaign_dict['params'])
+                    except json.JSONDecodeError:
+                        # Если не удается распарсить, оставляем как есть
+                        pass
+                return campaign_dict
             return None
 
     async def update_status(self, campaign_id: int, new_status: str):
@@ -452,4 +462,13 @@ class CampaignManager:
         return recommendations if recommendations else ["Campaign is performing well. Continue current strategy."]
 
 # Глобальная переменная для CampaignManager будет инициализирована в main.py
-campaign_manager: CampaignManager = None
+campaign_manager: CampaignManager | None = None
+
+def set_campaign_manager(manager: CampaignManager):
+    """Set the global campaign_manager instance."""
+    global campaign_manager
+    campaign_manager = manager
+
+def get_campaign_manager():
+    """Get the current campaign_manager instance."""
+    return campaign_manager

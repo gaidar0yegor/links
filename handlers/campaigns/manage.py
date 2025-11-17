@@ -3,8 +3,8 @@ from aiogram import Router, F
 from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from states.campaign_states import CampaignStates
-from services.campaign_manager import campaign_manager
-from handlers.main_menu import MainMenuCallback # Для кнопки "Назад"
+from services.campaign_manager import get_campaign_manager
+
 from datetime import datetime
 
 router = Router()
@@ -76,17 +76,33 @@ async def enter_campaign_module(callback: CallbackQuery, state: FSMContext):
 
     # Получаем список кампаний из БД
     try:
-        campaigns = await campaign_manager.get_all_campaigns_summary()
-        print(f"� Retrieved {len(campaigns)} campaigns")
+        campaign_mgr = get_campaign_manager()
+        if campaign_mgr is None:
+            print("❌ campaign_manager is None")
+            campaigns = []
+        else:
+            campaigns = await campaign_mgr.get_all_campaigns_summary()
+            print(f"📊 Retrieved {len(campaigns)} campaigns")
+            if campaigns:
+                print(f"📋 First campaign: {campaigns[0]}")
+                for i, camp in enumerate(campaigns):
+                    print(f"📋 Campaign {i+1}: ID={camp['id']}, Name='{camp['name']}', Status='{camp['status']}'")
+            else:
+                print("📋 No campaigns retrieved")
     except Exception as e:
         print(f"❌ Error getting campaigns: {e}")
+        import traceback
+        traceback.print_exc()
         campaigns = []
 
     text = "**🎯 Affiliate Campaigns Management**\n\nChoose an operation or select a campaign to edit:"
 
+    keyboard = get_campaign_menu_keyboard(campaigns)
+    print(f"⌨️ Generated keyboard with {len(keyboard.inline_keyboard)} buttons")
+
     await callback.message.edit_text(
         text,
-        reply_markup=get_campaign_menu_keyboard(campaigns)
+        reply_markup=keyboard
     )
     await callback.answer()
 
@@ -94,15 +110,24 @@ async def enter_campaign_module(callback: CallbackQuery, state: FSMContext):
 async def enter_campaign_edit_menu(callback: CallbackQuery, state: FSMContext):
     """Открывает меню редактирования/управления конкретной кампанией."""
 
+    print(f"🎯 Campaign edit clicked: {callback.data}")
+
     # Извлекаем ID кампании
-    campaign_id = int(callback.data.split(":")[1])
+    try:
+        campaign_id = int(callback.data.split(":")[1])
+        print(f"📋 Extracted campaign ID: {campaign_id}")
+    except (ValueError, IndexError) as e:
+        print(f"❌ Error parsing campaign ID from {callback.data}: {e}")
+        await callback.answer("❌ Invalid campaign ID", show_alert=True)
+        return
 
     # TODO: Получить полные данные кампании из БД
-    campaign = await campaign_manager.get_campaign_details(campaign_id)
+    campaign_mgr = get_campaign_manager()
+    campaign = await campaign_mgr.get_campaign_details(campaign_id) if campaign_mgr else None
 
     if not campaign:
         await callback.answer("❌ Кампания не найдена.", show_alert=True)
-        await enter_campaign_module(callback) # Вернуться в главное меню кампаний
+        await enter_campaign_module(callback, state) # Вернуться в главное меню кампаний
         return
 
     await state.set_state(CampaignStates.campaign_edit_main)
@@ -132,8 +157,9 @@ async def toggle_campaign_status(callback: CallbackQuery, state: FSMContext):
     campaign_id = int(campaign_id_str)
 
     # 1. Проверяем, можно ли запустить (только если есть тайминги)
-    if action == 'run':
-        has_timings = await campaign_manager.has_timings(campaign_id)
+    campaign_mgr = get_campaign_manager()
+    if action == 'run' and campaign_mgr:
+        has_timings = await campaign_mgr.has_timings(campaign_id)
         if not has_timings:
             await callback.answer("⚠️ Невозможно запустить! Сначала установите тайминги (2.4).", show_alert=True)
             # Переоткрываем меню, чтобы пользователь увидел кнопку таймингов
@@ -141,8 +167,9 @@ async def toggle_campaign_status(callback: CallbackQuery, state: FSMContext):
             return
 
     # 2. Обновляем статус в БД
-    new_status = 'running' if action == 'run' else 'stopped'
-    await campaign_manager.update_status(campaign_id, new_status)
+    if campaign_mgr:
+        new_status = 'running' if action == 'run' else 'stopped'
+        await campaign_mgr.update_status(campaign_id, new_status)
 
     await callback.answer(f"Кампания {'запущена' if action == 'run' else 'остановлена'}.", show_alert=True)
 
@@ -161,7 +188,8 @@ async def start_timing_setup(callback: CallbackQuery, state: FSMContext):
     await state.update_data({'current_campaign_id': campaign_id})
 
     # Получаем текущие тайминги для отображения
-    current_timings = await campaign_manager.get_timings(campaign_id)
+    campaign_mgr = get_campaign_manager()
+    current_timings = await campaign_mgr.get_timings(campaign_id) if campaign_mgr else []
     timings_text = "Текущие тайминги:\n"
     if current_timings:
         for t in current_timings:
@@ -241,12 +269,14 @@ async def timing_input_end(message: Message, state: FSMContext):
         return
 
     # Сохранение тайминга (2.4)
-    await campaign_manager.save_timing(
-        campaign_id=campaign_id,
-        day=timing_setup['day_index'],
-        start_time=timing_setup['start_time'],
-        end_time=end_time_str
-    )
+    campaign_mgr = get_campaign_manager()
+    if campaign_mgr:
+        await campaign_mgr.save_timing(
+            campaign_id=campaign_id,
+            day=timing_setup['day_index'],
+            start_time=timing_setup['start_time'],
+            end_time=end_time_str
+        )
 
     await message.answer(
         f"✅ Тайминг для **{timing_setup['day_name']}** успешно установлен: с {timing_setup['start_time']} до {end_time_str}."
@@ -266,7 +296,8 @@ async def confirm_delete_campaign(callback: CallbackQuery):
     campaign_id = int(callback.data.split(":")[1])
 
     # 1. Получаем имя для подтверждения
-    campaign = await campaign_manager.get_campaign_details(campaign_id)
+    campaign_mgr = get_campaign_manager()
+    campaign = await campaign_mgr.get_campaign_details(campaign_id) if campaign_mgr else None
     if not campaign:
         await callback.answer("❌ Кампания не найдена.", show_alert=True)
         return
@@ -283,16 +314,18 @@ async def confirm_delete_campaign(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("campaign_final_delete:"))
-async def finalize_delete_campaign(callback: CallbackQuery):
+async def finalize_delete_campaign(callback: CallbackQuery, state: FSMContext):
     """Выполняет удаление кампании."""
     campaign_id = int(callback.data.split(":")[1])
 
     # 1. Получаем имя для логирования
-    campaign = await campaign_manager.get_campaign_details(campaign_id)
+    campaign_mgr = get_campaign_manager()
+    campaign = await campaign_mgr.get_campaign_details(campaign_id) if campaign_mgr else None
     campaign_name = campaign['name'] if campaign else f"ID {campaign_id}"
 
     try:
-        await campaign_manager.delete_campaign(campaign_id)
+        if campaign_mgr:
+            await campaign_mgr.delete_campaign(campaign_id)
 
         # Логирование
         bot_logger.log_campaign_change(
@@ -305,7 +338,7 @@ async def finalize_delete_campaign(callback: CallbackQuery):
 
         # Возврат в главное меню кампаний
         from handlers.campaigns.manage import enter_campaign_module
-        await enter_campaign_module(callback)
+        await enter_campaign_module(callback, state)
 
     except Exception as e:
         bot_logger.log_error("Manage Module", e, f"Ошибка при удалении кампании {campaign_id}")

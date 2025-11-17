@@ -124,7 +124,14 @@ class PostManager:
                     keywords_parts.extend(subcategories)
 
                 keywords = " ".join(keywords_parts) if keywords_parts else "popular product"
-                product_data = await amazon_paapi_client.search_items(keywords=keywords, min_rating=min_rating)
+
+                # Use browse_node_ids from campaign if available (new unified categories system)
+                browse_node_ids = campaign.get('browse_node_ids', [])
+                product_data = await amazon_paapi_client.search_items(
+                    keywords=keywords,
+                    min_rating=min_rating,
+                    browse_node_ids=browse_node_ids if browse_node_ids else None
+                )
 
             if not product_data:
                 error_msg = f"No product data available for campaign {campaign['name']}"

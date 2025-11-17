@@ -96,5 +96,69 @@ class GoogleSheetsAPI:
             print(f"Error reading UTM marks: {e}")
             return {}
 
+    def get_categories_subcategories(self) -> list[dict]:
+        """Получает объединенные данные категорий и подкатегорий."""
+        if not self.available:
+            # Return dummy data for testing
+            return [
+                {
+                    "category": "Apparel",
+                    "node_id_category": "2892859031",
+                    "subcategory": "Abbigliamento da notte, lingerie e intimo",
+                    "node_id_subcategory": "21695399031"
+                },
+                {
+                    "category": "Apparel",
+                    "node_id_category": "2892859031",
+                    "subcategory": "Abbigliamento premaman",
+                    "node_id_subcategory": "1806562031"
+                }
+            ]
+
+        try:
+            data = self.get_sheet_data("categories_subcategories")
+            categories = []
+            for row in data[1:]:  # Skip header
+                if len(row) >= 4:
+                    categories.append({
+                        "category": row[0],
+                        "node_id_category": row[1],
+                        "subcategory": row[2],
+                        "node_id_subcategory": row[3]
+                    })
+            return categories
+        except Exception as e:
+            print(f"Error reading categories_subcategories: {e}")
+            return []
+
+    def get_unique_categories(self) -> list[dict]:
+        """Получает уникальные категории из объединенной таблицы."""
+        categories_data = self.get_categories_subcategories()
+        unique_categories = {}
+
+        for item in categories_data:
+            category_name = item["category"]
+            if category_name not in unique_categories:
+                unique_categories[category_name] = {
+                    "name": category_name,
+                    "node_id": item["node_id_category"]
+                }
+
+        return list(unique_categories.values())
+
+    def get_subcategories_for_category(self, category_name: str) -> list[dict]:
+        """Получает подкатегории для указанной категории."""
+        categories_data = self.get_categories_subcategories()
+        subcategories = []
+
+        for item in categories_data:
+            if item["category"] == category_name:
+                subcategories.append({
+                    "name": item["subcategory"],
+                    "node_id": item["node_id_subcategory"]
+                })
+
+        return subcategories
+
 # Создай глобальный экземпляр для использования в хэндлерах
 sheets_api = GoogleSheetsAPI()
