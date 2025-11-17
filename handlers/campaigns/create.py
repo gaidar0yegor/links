@@ -228,7 +228,7 @@ async def show_subcategories_for_category(callback: CallbackQuery, state: FSMCon
         reply_markup=get_multiselect_keyboard(
             options=options,
             selected_values=selected_subs,
-            done_callback=f"campaign_done_subcategories:{current_category}",
+            done_callback=f"campaign_done_subcategories:{current_index}",
             back_callback="campaign_done_channels"
         )
     )
@@ -237,14 +237,14 @@ async def show_subcategories_for_category(callback: CallbackQuery, state: FSMCon
 @router.callback_query(F.data.startswith("campaign_done_subcategories:"), CampaignStates.campaign_new_select_subcategory)
 async def done_select_subcategories_for_category(callback: CallbackQuery, state: FSMContext):
     """Обрабатывает завершение выбора подкатегорий для текущей категории."""
-    category_name = callback.data.split(":", 1)[1]
+    # category_name = callback.data.split(":", 1)[1] # No longer needed
 
     data = await state.get_data()
     current_index = data['new_campaign'].get('current_category_index', 0)
-    subcategories_data = data['new_campaign'].get('subcategories', {})
+    # subcategories_data = data['new_campaign'].get('subcategories', {}) # Not needed
 
     # Get selected subcategories for this category
-    selected_subs = subcategories_data.get(category_name, [])
+    # selected_subs = subcategories_data.get(category_name, []) # Not needed
 
     # Save selection and move to next category
     await state.update_data(
@@ -454,7 +454,7 @@ async def toggle_selection(callback: CallbackQuery, state: FSMContext):
                 reply_markup=get_multiselect_keyboard(
                     options=options,
                     selected_values=selected_list,
-                    done_callback=f"campaign_done_subcategories:{current_category}",
+                    done_callback=f"campaign_done_subcategories:{current_index}",
                     back_callback="campaign_done_channels"
                 )
             )
@@ -565,7 +565,7 @@ async def toggle_select_all(callback: CallbackQuery, state: FSMContext):
                 reply_markup=get_multiselect_keyboard(
                     options=options,
                     selected_values=subcategories_data[current_category],
-                    done_callback=f"campaign_done_subcategories:{current_category}",
+                    done_callback=f"campaign_done_subcategories:{current_index}",
                     back_callback="campaign_done_channels"
                 )
             )
