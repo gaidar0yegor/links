@@ -1,5 +1,6 @@
 # handlers/campaigns/manage.py
 from aiogram import Router, F
+from aiogram.filters import StateFilter
 from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from typing import List, Optional
@@ -102,9 +103,10 @@ async def enter_campaign_module(callback: CallbackQuery, state: FSMContext):
     )
     await callback.answer()
 
-@router.callback_query(F.data.startswith("campaign_edit:"))
+@router.callback_query(F.data.startswith("campaign_edit:"), StateFilter("*"))
 async def enter_campaign_edit_menu(callback: CallbackQuery, state: FSMContext):
     """Открывает меню редактирования/управления конкретной кампанией."""
+    await state.clear()  # Clear state when returning to this menu
 
     print(f"🎯 Campaign edit clicked: {callback.data}")
 
@@ -215,7 +217,7 @@ async def edit_campaign_timings(query_or_message: CallbackQuery | Message, state
         options=options,
         selected_values=selected_days,
         done_callback=f"timing_days_done:{campaign_id}",
-        back_callback=f"campaign_view:{campaign_id}"
+        back_callback=f"campaign_edit:{campaign_id}"
     )
 
     message_text = (
@@ -255,7 +257,7 @@ async def toggle_day_selection(callback: CallbackQuery, state: FSMContext):
         options=options,
         selected_values=selected_days,
         done_callback=f"timing_days_done:{campaign_id}",
-        back_callback=f"campaign_view:{campaign_id}"
+        back_callback=f"campaign_edit:{campaign_id}"
     )
 
     await callback.message.edit_reply_markup(reply_markup=keyboard)
@@ -284,7 +286,7 @@ async def toggle_select_all_days(callback: CallbackQuery, state: FSMContext):
         options=options,
         selected_values=new_selected_days,
         done_callback=f"timing_days_done:{campaign_id}",
-        back_callback=f"campaign_view:{campaign_id}"
+        back_callback=f"campaign_edit:{campaign_id}"
     )
 
     await callback.message.edit_reply_markup(reply_markup=keyboard)
