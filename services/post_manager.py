@@ -114,7 +114,7 @@ class PostManager:
                 # Fallback to original Amazon API method
                 categories = params.get('categories', [])
                 subcategories = params.get('subcategories', [])
-                min_rating = params.get('min_rating', 0.0)
+                min_rating = float(params.get('min_rating', 0.0))
 
                 keywords_parts = []
                 if categories:
