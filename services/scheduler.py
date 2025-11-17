@@ -60,7 +60,7 @@ class CampaignScheduler:
             conflicting_channels = await self.campaign_manager.get_conflicting_campaigns(
                 campaign['id'],
                 current_day,
-                current_time_str
+                current_time
             )
 
             if conflicting_channels:
@@ -96,8 +96,8 @@ class CampaignScheduler:
             # Проверяем день
             if timing['day_of_week'] == current_day:
                 # Проверяем, находится ли текущее время в интервале [start_time, end_time)
-                start = datetime.strptime(timing['start_time'], "%H:%M:%S").time()
-                end = datetime.strptime(timing['end_time'], "%H:%M:%S").time()
+                start = timing['start_time']
+                end = timing['end_time']
 
                 # Постинг должен произойти один раз в начале интервала или в течение него
                 # Для простоты, допустим, мы постим, если время находится в интервале

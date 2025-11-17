@@ -84,7 +84,6 @@ class PostManager:
             # Import enhanced services
             from services.content_generator import content_generator
             from services.product_filter import product_filter
-            from services.posting_scheduler import posting_scheduler
         except ImportError as e:
             print(f"⚠️  Enhanced services not available: {e}. Falling back to basic posting.")
             return await self.fetch_and_post(campaign)
@@ -247,15 +246,6 @@ class PostManager:
 
         except Exception as e:
             print(f"⚠️  Statistics logging failed: {e}")
-
-        # --- Schedule Next Post ---
-        try:
-            if posting_schedule_id and successful_posts > 0:
-                next_post_time = posting_scheduler.get_next_posting_time(posting_schedule_id)
-                if next_post_time:
-                    print(f"📅 Next post scheduled for: {next_post_time.strftime('%Y-%m-%d %H:%M')}")
-        except Exception as e:
-            print(f"⚠️  Schedule calculation failed: {e}")
 
     async def fetch_and_post(self, campaign: dict):
         """Legacy posting method for backward compatibility."""

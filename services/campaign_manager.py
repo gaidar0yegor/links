@@ -148,12 +148,22 @@ class CampaignManager:
                 return []
 
             campaigns = [dict(r) for r in campaign_records]
+
+            # Parse params from JSON string to dict
+            import json
+            for campaign in campaigns:
+                if isinstance(campaign.get('params'), str):
+                    try:
+                        campaign['params'] = json.loads(campaign['params'])
+                    except json.JSONDecodeError:
+                        campaign['params'] = {}
+
             campaign_ids = [c['id'] for c in campaigns]
 
             # 2. Запрос всех таймингов для этих кампаний
             # Используем $1 для передачи списка ID
             timings_query = """
-            SELECT campaign_id, day_of_week, start_time::text, end_time::text
+            SELECT campaign_id, day_of_week, start_time, end_time
             FROM campaign_timings
             WHERE campaign_id = ANY($1::int[])
             ORDER BY campaign_id, day_of_week;
