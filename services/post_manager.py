@@ -5,7 +5,7 @@ from PIL import Image, ImageDraw, ImageFont # Для водяных знаков
 from io import BytesIO
 from services.sheets_api import sheets_api
 from services.amazon_paapi_client import amazon_paapi_client
-from services.llm_client import GeminiClient
+from services.llm_client import OpenAIClient
 
 class PostManager:
     """Управляет бизнес-логикой: API, Рерайт, Водяные знаки, Постинг."""
@@ -13,7 +13,7 @@ class PostManager:
         self.bot = bot
         # Инициализация LLM клиента
         try:
-            self.llm_client = GeminiClient()
+            self.llm_client = OpenAIClient()
         except Exception as e:
             print(f"⚠️  Не удалось инициализировать LLM клиент: {e}. Рерайт будет недоступен.")
             self.llm_client = None

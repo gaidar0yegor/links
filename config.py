@@ -40,9 +40,9 @@ class AmazonConfig:
 
 @dataclass
 class LLMConfig:
-    """Конфигурация для LLM сервиса (Gemini API)"""
-    api_key: str = os.getenv("GEMINI_API_KEY")
-    model: str = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+    """Конфигурация для LLM сервиса (OpenAI API)"""
+    api_key: str = os.getenv("OPENAI_API_KEY")
+    model: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 @dataclass
 class Config:

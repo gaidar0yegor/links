@@ -7,7 +7,7 @@ Handles content generation using Google Sheets templates and AI rewriting.
 import random
 from typing import Dict, List, Optional, Any
 from services.sheets_api import sheets_api
-from services.llm_client import GeminiClient
+from services.llm_client import OpenAIClient
 from services.logger import bot_logger
 
 
@@ -15,10 +15,19 @@ class ContentGenerator:
     """Service for generating affiliate content using templates and AI."""
 
     def __init__(self):
-        self.llm_client = GeminiClient()
+        # Create LLM client dynamically to avoid caching issues
+        self._llm_client = None
         self.templates_cache = {}
         self.hashtags_cache = {}
         self._load_templates()
+
+    @property
+    def llm_client(self):
+        """Lazy initialization of LLM client."""
+        if self._llm_client is None:
+            from services.llm_client import OpenAIClient
+            self._llm_client = OpenAIClient()
+        return self._llm_client
 
     def _load_templates(self):
         """Load content templates and hashtags from Google Sheets."""
@@ -194,5 +203,15 @@ class ContentGenerator:
         return post_data
 
 
-# Global instance
-content_generator = ContentGenerator()
+# Global instance - lazy initialization
+_content_generator = None
+
+def get_content_generator():
+    """Get the global content generator instance with lazy initialization."""
+    global _content_generator
+    if _content_generator is None:
+        _content_generator = ContentGenerator()
+    return _content_generator
+
+# For backward compatibility
+content_generator = get_content_generator()
