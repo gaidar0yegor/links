@@ -2,10 +2,11 @@
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
-from states.campaign_states import CampaignStates
+from typing import List, Optional
 from services.campaign_manager import get_campaign_manager
-
-from datetime import datetime
+from states.campaign_states import CampaignStates
+from services.logger import bot_logger
+from datetime import datetime, time
 
 router = Router()
 
@@ -274,8 +275,8 @@ async def timing_input_end(message: Message, state: FSMContext):
         await campaign_mgr.save_timing(
             campaign_id=campaign_id,
             day=timing_setup['day_index'],
-            start_time=timing_setup['start_time'],
-            end_time=end_time_str
+            start_time=start_time_obj,
+            end_time=end_time_obj
         )
 
     await message.answer(
