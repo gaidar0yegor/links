@@ -5,27 +5,20 @@ from config import conf
 from services.logger import bot_logger
 
 try:
-    from amazon.paapi import (
-        AmazonAPI, PartnerType, SearchItemsRequest, SearchItemsResource,
-        GetItemsRequest, GetItemsResource, DeliveryFlag, ApiException
-    )
-    PAAPI_AVAILABLE = "amazon_paapi"
+    # Correct imports for python-amazon-paapi library
+    from amazon_paapi.sdk.api.default_api import DefaultApi
+    from amazon_paapi.sdk.models.partner_type import PartnerType
+    from amazon_paapi.sdk.models.search_items_request import SearchItemsRequest
+    from amazon_paapi.sdk.models.search_items_resource import SearchItemsResource
+    from amazon_paapi.sdk.models.get_items_request import GetItemsRequest
+    from amazon_paapi.sdk.models.get_items_resource import GetItemsResource
+    from amazon_paapi.sdk.models.delivery_flag import DeliveryFlag
+    from amazon_paapi.sdk.rest import ApiException
+    PAAPI_AVAILABLE = "python_amazon_paapi"
 except ImportError as e:
-    print(f"amazon.paapi import failed: {e}")
-    try:
-        from paapi5_python_sdk.api.default_api import DefaultApi
-        from paapi5_python_sdk.models.partner_type import PartnerType
-        from paapi5_python_sdk.models.search_items_request import SearchItemsRequest
-        from paapi5_python_sdk.models.search_items_resource import SearchItemsResource
-        from paapi5_python_sdk.models.get_items_request import GetItemsRequest
-        from paapi5_python_sdk.models.get_items_resource import GetItemsResource
-        from paapi5_python_sdk.models.delivery_flag import DeliveryFlag
-        from paapi5_python_sdk.rest import ApiException
-        PAAPI_AVAILABLE = "paapi5_python_sdk"
-    except ImportError as e2:
-        print(f"paapi5_python_sdk import failed: {e2}")
-        PAAPI_AVAILABLE = False
-        bot_logger.log_error("AmazonPAAPIClient", Exception("PAAPI5 SDK not available"), "Using fallback methods")
+    print(f"python-amazon-paapi import failed: {e}")
+    PAAPI_AVAILABLE = False
+    bot_logger.log_error("AmazonPAAPIClient", Exception("python-amazon-paapi SDK not available"), "Using fallback methods")
 
 
 class AmazonPAAPIClient:
@@ -52,25 +45,26 @@ class AmazonPAAPIClient:
         self.api_client = None
         if PAAPI_AVAILABLE and self.use_amazon_api:
             try:
-                if PAAPI_AVAILABLE == "amazon_paapi":
-                    # Use amazon.paapi package
-                    print(f"DEBUG: Initializing AmazonAPI with access_key={self.access_key[:10]}..., partner_tag={self.associate_tag}")
-                    self.api_client = AmazonAPI(
-                        access_key=self.access_key,
-                        secret_key=self.secret_key,
-                        partner_tag=self.associate_tag,
-                        country='IT'  # Italy
-                    )
-                    print("DEBUG: AmazonAPI initialized successfully")
-                else:
-                    # Use paapi5_python_sdk
+                if PAAPI_AVAILABLE == "python_amazon_paapi":
+                    # Use python-amazon-paapi library with correct initialization
+                    print(f"DEBUG: Initializing DefaultApi with access_key={self.access_key[:10]}..., host={self.host}, region={self.region}")
                     self.api_client = DefaultApi(
                         access_key=self.access_key,
                         secret_key=self.secret_key,
                         host=self.host,
                         region=self.region
                     )
-                bot_logger.log_info("AmazonPAAPIClient", "PAAPI 5.0 client initialized successfully")
+                    print("DEBUG: DefaultApi initialized successfully")
+                else:
+                    # Fallback for other SDKs (should not happen with our current setup)
+                    self.api_client = None
+                    print("DEBUG: Unsupported PAAPI SDK")
+
+                if self.api_client:
+                    bot_logger.log_info("AmazonPAAPIClient", "PAAPI 5.0 client initialized successfully")
+                else:
+                    bot_logger.log_error("AmazonPAAPIClient", Exception("Failed to initialize API client"), "Client is None")
+
             except Exception as e:
                 print(f"DEBUG: Failed to initialize PAAPI client: {e}")
                 import traceback
@@ -105,12 +99,8 @@ class AmazonPAAPIClient:
             }
 
         try:
-            if PAAPI_AVAILABLE == "amazon_paapi":
-                # Use advanced search with multiple steps
-                return await self._advanced_search_api(keywords, filters)
-
-            else:
-                # Use paapi5_python_sdk with basic search
+            if PAAPI_AVAILABLE == "python_amazon_paapi":
+                # Use python-amazon-paapi with basic search
                 return self._basic_search_api(keywords, min_rating)
 
         except Exception as e:
@@ -325,7 +315,7 @@ class AmazonPAAPIClient:
                     SearchItemsResource.OFFERS_LISTINGS_PRICE,
                     SearchItemsResource.IMAGES_PRIMARY_LARGE,
                     SearchItemsResource.ITEMINFO_FEATURES,
-                    SearchItemsResource.ITEMINFO_PRODUCT_INFO,
+                    SearchItemsResource.ITEMINFO_PRODUCTINFO,
                 ],
             )
 
