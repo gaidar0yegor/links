@@ -233,10 +233,19 @@ class CampaignManager:
             running_campaigns = await conn.fetch(running_campaigns_query, campaign_id)
 
             for rc in running_campaigns:
+                # Parse params from JSON string to dict if needed
+                rc_params = rc['params']
+                if isinstance(rc_params, str):
+                    import json
+                    try:
+                        rc_params = json.loads(rc_params)
+                    except json.JSONDecodeError:
+                        rc_params = {}
+
                 # Проверяем, активна ли эта кампания в текущее время
                 if rc['id'] in active_timing_ids:
                     # Проверяем пересечение каналов
-                    rc_channels = rc['params'].get('channels', [])
+                    rc_channels = rc_params.get('channels', [])
 
                     for channel in current_channels:
                         if channel in rc_channels:
