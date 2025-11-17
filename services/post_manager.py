@@ -1,5 +1,6 @@
 # services/post_manager.py
 import requests
+from aiogram.types import BufferedInputFile
 from PIL import Image, ImageDraw, ImageFont # Для водяных знаков
 from io import BytesIO
 from services.sheets_api import sheets_api
@@ -148,10 +149,10 @@ class PostManager:
         try:
             if content_template_id:
                 # Use specific template
-                content_result = content_generator.generate_post_content(product_data)
+                content_result = await content_generator.generate_post_content(product_data)
             else:
                 # Use category-based template selection
-                content_result = content_generator.generate_post_content(product_data)
+                content_result = await content_generator.generate_post_content(product_data)
 
             if not content_result:
                 print(f"⚠️  Content generation failed, using fallback for campaign {campaign['name']}")
@@ -212,7 +213,7 @@ class PostManager:
                     image_stream.seek(0)
                     await self.bot.send_photo(
                         chat_id=channel_name,
-                        photo=image_stream,
+                        photo=BufferedInputFile(image_stream.read(), filename="photo.jpg"),
                         caption=text_content,
                         parse_mode='Markdown'
                     )

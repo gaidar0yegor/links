@@ -85,7 +85,7 @@ class ContentGenerator:
         """Get hashtags for the specified category."""
         return self.hashtags_cache.get(category, '#Affiliate #Product')
 
-    def generate_content(self, product_data: Dict[str, Any], category: Optional[str] = None) -> Optional[Dict[str, str]]:
+    async def generate_content(self, product_data: Dict[str, Any], category: Optional[str] = None) -> Optional[Dict[str, str]]:
         """
         Generate content for a product using templates and AI rewriting.
 
@@ -127,7 +127,7 @@ class ContentGenerator:
 
             # Use AI to rewrite the content if available
             try:
-                rewritten_content = self._rewrite_content(content)
+                rewritten_content = await self._rewrite_content(content)
                 if rewritten_content:
                     content = rewritten_content
             except Exception as e:
@@ -144,7 +144,7 @@ class ContentGenerator:
             bot_logger.log_error("ContentGenerator", e, f"Content generation failed for product: {product_data.get('name', 'Unknown')}")
             return None
 
-    def _rewrite_content(self, content: str) -> Optional[str]:
+    async def _rewrite_content(self, content: str) -> Optional[str]:
         """Use AI to rewrite content for better engagement."""
         try:
             # Get rewrite prompt from Google Sheets
@@ -156,14 +156,14 @@ class ContentGenerator:
 
             full_prompt = f"{prompt}\n\n{content}"
 
-            rewritten = self.llm_client.rewrite_text(prompt, content)
+            rewritten = await self.llm_client.rewrite_text(prompt, content)
             return rewritten if rewritten else content
 
         except Exception as e:
             bot_logger.log_error("ContentGenerator", e, "AI content rewriting failed")
             return content
 
-    def generate_post_content(self, product_data: Dict[str, Any]) -> Optional[Dict[str, str]]:
+    async def generate_post_content(self, product_data: Dict[str, Any]) -> Optional[Dict[str, str]]:
         """
         Generate complete post content including text, hashtags, and metadata.
 
@@ -173,7 +173,7 @@ class ContentGenerator:
         Returns:
             Complete post data dictionary
         """
-        content_result = self.generate_content(product_data)
+        content_result = await self.generate_content(product_data)
 
         if not content_result:
             return None
