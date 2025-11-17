@@ -85,16 +85,22 @@ class AmazonPAAPIClient:
         Returns:
             Product data dictionary or None if error
         """
+        print(f"DEBUG: search_items called with keywords={keywords}, min_rating={min_rating}, browse_node_ids={browse_node_ids}")
+
         # If Amazon API is disabled or SDK not available, use fallback
         if not self.use_amazon_api or not PAAPI_AVAILABLE or not self.api_client:
             bot_logger.log_info("AmazonPAAPIClient", "Using Google Sheets fallback for product data")
             return self._get_sheets_fallback_data(keywords, min_rating, browse_node_ids)
 
         # Set default filters and merge with provided ones
+        # Convert min_rating to integer for Amazon API (expects 1-5)
+        min_rating_int = int(float(min_rating)) if min_rating else 3
+        min_rating_int = max(1, min(min_rating_int, 5))  # Ensure within 1-5 range
+
         final_filters = {
             "MinPrice": 10.00,
             "MinSavingPercent": 5,
-            "MinReviewsRating": max(min_rating, 3.5),
+            "MinReviewsRating": min_rating_int,
             "FulfilledByAmazon": True
         }
         if filters:
@@ -112,9 +118,12 @@ class AmazonPAAPIClient:
                 return await self._advanced_search_api(keywords, final_filters)
             elif PAAPI_AVAILABLE == "python_amazon_paapi":
                 # Use python-amazon-paapi with browse node search if available
+                print(f"DEBUG: search_items - browse_node_ids={browse_node_ids}, type={type(browse_node_ids)}")
                 if browse_node_ids:
+                    print(f"DEBUG: Calling browse_node_search_api with browse_node_ids={browse_node_ids}")
                     return self._browse_node_search_api(browse_node_ids, keywords, min_rating, final_filters)
                 else:
+                    print(f"DEBUG: Calling basic_search_api")
                     return self._basic_search_api(keywords, min_rating)
 
         except Exception as e:
@@ -318,6 +327,11 @@ class AmazonPAAPIClient:
     def _browse_node_search_api(self, browse_node_ids: List[str], keywords: str, min_rating: float, filters: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Search within specific browse nodes using Amazon PA API."""
         try:
+            # Convert min_rating to integer for Amazon API
+            min_rating_int = int(float(min_rating)) if min_rating else 3
+            min_rating_int = max(1, min(min_rating_int, 5))  # Ensure within 1-5 range
+            print(f"DEBUG: browse_node_search_api - min_rating={min_rating}, min_rating_int={min_rating_int}")
+
             # Try each browse node until we find products
             for node_id in browse_node_ids:
                 try:
@@ -329,7 +343,7 @@ class AmazonPAAPIClient:
                         keywords=keywords if keywords else None,
                         search_index="All",
                         item_count=5,
-                        min_reviews_rating=max(min_rating, 3.5),
+                        min_reviews_rating=min_rating_int,
                         resources=[
                             SearchItemsResource.ITEMINFO_TITLE,
                             SearchItemsResource.OFFERS_LISTINGS_PRICE,
@@ -381,6 +395,10 @@ class AmazonPAAPIClient:
     def _basic_search_api(self, keywords: str, min_rating: float) -> Optional[Dict[str, Any]]:
         """Fallback to basic search for paapi5_python_sdk."""
         try:
+            # Convert min_rating to integer for Amazon API
+            min_rating_int = int(float(min_rating)) if min_rating else 3
+            min_rating_int = max(1, min(min_rating_int, 5))  # Ensure within 1-5 range
+
             search_items_request = SearchItemsRequest(
                 partner_tag=self.associate_tag,
                 partner_type=PartnerType.ASSOCIATES,
@@ -397,7 +415,7 @@ class AmazonPAAPIClient:
             )
 
             if min_rating > 0:
-                search_items_request.min_reviews_rating = min_rating
+                search_items_request.min_reviews_rating = min_rating_int
 
             response = self.api_client.search_items(search_items_request)
 

@@ -81,10 +81,12 @@ class PostManager:
         Enhanced posting method with Google Sheets integration.
         Uses content templates, product filters, and automated content generation.
         """
+        print(f"DEBUG: fetch_and_post_enhanced called for campaign {campaign.get('name', 'Unknown')}")
         try:
             # Import enhanced services
             from services.content_generator import content_generator
             from services.product_filter import product_filter
+            print(f"DEBUG: Enhanced services imported successfully")
         except ImportError as e:
             print(f"⚠️  Enhanced services not available: {e}. Falling back to basic posting.")
             return await self.fetch_and_post(campaign)
@@ -134,8 +136,9 @@ class PostManager:
 
                 keywords = " ".join(keywords_parts) if keywords_parts else "popular product"
 
-                # Use browse_node_ids from campaign if available (new unified categories system)
-                browse_node_ids = campaign.get('browse_node_ids', [])
+                # Use browse_node_ids from campaign params if available (new unified categories system)
+                browse_node_ids = params.get('browse_node_ids', [])
+                print(f"DEBUG: About to call amazon_paapi_client.search_items with browse_node_ids={browse_node_ids}")
                 product_data = await amazon_paapi_client.search_items(
                     keywords=keywords,
                     min_rating=min_rating,

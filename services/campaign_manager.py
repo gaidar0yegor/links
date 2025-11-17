@@ -204,12 +204,21 @@ class CampaignManager:
         current_channels = current_campaign_details['params'].get('channels', [])
         if not current_channels: return []
 
-        # 2. Запрос ID запущенных кампаний, активных сейчас (по таймингу)
+        # 2. Convert time to time object for database query
+        from datetime import datetime
+        if isinstance(current_time, str):
+            current_time_obj = datetime.strptime(current_time, "%H:%M").time()
+        elif isinstance(current_time, datetime.time):
+            current_time_obj = current_time
+        else:
+            raise ValueError(f"current_time must be str or datetime.time, got {type(current_time)}")
+
+        # 3. Запрос ID запущенных кампаний, активных сейчас (по таймингу)
         active_timing_ids_query = """
         SELECT campaign_id FROM campaign_timings
         WHERE day_of_week = $1
-        AND $2::time >= start_time
-        AND $2::time < end_time;
+        AND $2 >= start_time
+        AND $2 < end_time;
         """
 
         # 3. Запрос всех запущенных кампаний (кроме текущей)
@@ -217,7 +226,7 @@ class CampaignManager:
 
         async with self.db_pool.acquire() as conn:
             # Получаем ID кампаний, которые активны по времени
-            active_timing_records = await conn.fetch(active_timing_ids_query, day_of_week, current_time)
+            active_timing_records = await conn.fetch(active_timing_ids_query, day_of_week, current_time_obj)
             active_timing_ids = {r['campaign_id'] for r in active_timing_records}
 
             conflicting_channels = set()
