@@ -205,13 +205,12 @@ class CampaignManager:
         if not current_channels: return []
 
         # 2. Convert time to time object for database query
-        from datetime import datetime
         if isinstance(current_time, str):
             current_time_obj = datetime.strptime(current_time, "%H:%M").time()
-        elif isinstance(current_time, datetime.time):
+        elif isinstance(current_time, time):
             current_time_obj = current_time
         else:
-            raise ValueError(f"current_time must be str or datetime.time, got {type(current_time)}")
+            raise ValueError(f"current_time must be str or time, got {type(current_time)}")
 
         # 3. Запрос ID запущенных кампаний, активных сейчас (по таймингу)
         active_timing_ids_query = """
