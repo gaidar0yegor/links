@@ -8,7 +8,7 @@ from db.redis_fsm import storage # Импортируем хранилище
 from db.postgres import init_db_pool # Используем инициализацию пула
 from services.campaign_manager import CampaignManager, campaign_manager
 from services.scheduler import CampaignScheduler # Импортируем планировщик
-from handlers.statistics import stats # Импортируем роутер статистики
+from handlers.statistics import stats_router as stats # Импортируем роутер статистики
 
 async def main():
     print("Инициализация инфраструктуры...")
