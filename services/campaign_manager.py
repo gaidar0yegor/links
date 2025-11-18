@@ -533,8 +533,8 @@ class CampaignManager:
         query = """
         INSERT INTO product_queue (
             campaign_id, asin, title, price, currency, rating, review_count,
-            sales_rank, image_url, affiliate_link, browse_node_ids, quality_score
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            sales_rank, image_url, affiliate_link, browse_node_ids, quality_score, features
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         RETURNING id;
         """
 
@@ -552,7 +552,8 @@ class CampaignManager:
                 product_data.get('image_url'),
                 product_data.get('affiliate_link'),
                 product_data.get('browse_node_ids', []),
-                product_data.get('sales_rank')  # Quality score = sales rank
+                product_data.get('sales_rank'),  # Quality score = sales rank
+                product_data.get('features', [])
             )
             return product_id
 

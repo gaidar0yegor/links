@@ -128,7 +128,8 @@ class ContentGenerator:
                 rating = '4.5'
 
             # Reviews are used for filtering only, not displayed in posts
-            reviews_count = None
+            reviews_count = (product_data.get('ReviewsCount') or product_data.get('review_count') or 'N/A')
+
 
             # Handle price
             price_raw = (product_data.get('Price') or
@@ -173,58 +174,22 @@ class ContentGenerator:
                 hashtags=''  # Add dummy value for backward compatibility with old templates
             )
 
-            # Always add price information if available and not already in content
-            if price and price != '' and f'Price: {price}' not in content and '💰' not in content:
-                # Insert price after the product name/title
-                lines = content.split('\n')
-                if lines:
-                    # Find the first line (usually the title) and add price after it
-                    title_line = lines[0]
-                    price_line = f'💰 **Price: {price}**'
-                    lines.insert(1, price_line)
-                    content = '\n'.join(lines)
+            # Use AI to generate the entire post, including features and hashtags
+            full_post_content = await self._generate_full_post_with_ai(product_data, content, language)
 
-            # Use AI to generate content with hashtags based on product data
-            try:
-                print(f"DEBUG: ContentGenerator - About to call _generate_content_with_product_data")
-                final_content, generated_hashtags = await self._generate_content_with_product_data(product_data, content, language)
-                print(f"DEBUG: ContentGenerator - LLM call returned: final_content={bool(final_content)}, hashtags='{generated_hashtags}'")
-                if final_content:
-                    print(f"DEBUG: ContentGenerator - Using AI-generated content: {final_content[:100]}...")
-                    content = final_content
-                    hashtags = generated_hashtags
-                    # Ensure price is still in the content after AI rewriting
-                    if price and price != '' and f'Price: {price}' not in content and '💰' not in content:
-                        # Re-insert price if AI removed it
-                        lines = content.split('\n')
-                        if lines and len(lines) > 1:
-                            # Insert price after the title line
-                            lines.insert(1, f'💰 **Price: {price}**')
-                            content = '\n'.join(lines)
-                else:
-                    # Fallback if AI generation fails
-                    print(f"DEBUG: ContentGenerator - AI generation returned None, using fallback")
-                    hashtags = '#Product #Affiliate'
-            except Exception as e:
-                print(f"DEBUG: ContentGenerator - AI content generation exception: {e}")
-                bot_logger.log_error("ContentGenerator", e, "AI content generation failed, using fallback")
-                hashtags = '#Product #Affiliate'
-
-            # If we have features from API, add them as bullet points to the content
-            features = product_data.get('features') or product_data.get('Features', [])
-            if features and isinstance(features, list) and len(features) > 0:
-                # Add top 2-3 features as bullet points
-                feature_bullets = "\n\n" + "\n".join(f"• {feature.strip()}" for feature in features[:3])
-                content += feature_bullets
-
-            # Apply language translation if needed
-            if language == 'ru':
-                content = await self._translate_to_russian(content)
-                hashtags = await self._translate_hashtags_to_russian(hashtags)
+            if not full_post_content:
+                # Fallback if AI generation fails
+                print(f"DEBUG: ContentGenerator - AI generation returned None, using fallback")
+                # Build a simple fallback content block
+                features = product_data.get('features') or product_data.get('Features', [])
+                feature_bullets = ""
+                if features and isinstance(features, list) and len(features) > 0:
+                    feature_bullets = "\n\n" + "\n".join(f"• {feature.strip()}" for feature in features[:3])
+                full_post_content = content + feature_bullets
 
             return {
-                'content': content,
-                'hashtags': hashtags,
+                'content': full_post_content,
+                'hashtags': '',  # Hashtags are now part of the main content
                 'template_id': template.get('id', 'fallback'),
                 'category': category
             }
@@ -233,147 +198,53 @@ class ContentGenerator:
             bot_logger.log_error("ContentGenerator", e, f"Content generation failed for product: {product_data.get('title', product_data.get('Title', 'Unknown'))}")
             return None
 
-    async def _generate_content_with_product_data(self, product_data: Dict[str, Any], base_content: str, language: str = 'en') -> tuple[Optional[str], str]:
-        """Use AI to generate content and hashtags based on full product data."""
+    async def _generate_full_post_with_ai(self, product_data: Dict[str, Any], base_content: str, language: str = 'en') -> Optional[str]:
+        """Use AI to generate the complete post body, including features, translation, and hashtags."""
         try:
             # Get rewrite prompt from Google Sheets
             rewrite_prompt_data = sheets_api.get_sheet_data('rewrite_prompt')
             if rewrite_prompt_data and len(rewrite_prompt_data) > 1:
-                base_prompt = rewrite_prompt_data[1][0]  # First row, first column
+                base_prompt = rewrite_prompt_data[1][0]
             else:
-                base_prompt = "Rewrite the following text to make it engaging and persuasive for a social media post."
+                base_prompt = "Rewrite the provided text to be an engaging and persuasive social media post."
 
             # Build comprehensive product information, including features
             features = product_data.get('features') or product_data.get('Features', [])
             feature_text = ""
             if features and isinstance(features, list) and len(features) > 0:
-                feature_text = "\nKey Features:\n" + "\n".join(f"- {feature.strip()}" for feature in features[:3])
+                feature_text = "\nKey Features:\n" + "\n".join(f"- {feature.strip()}" for feature in features)
 
             product_info = f"""
+---
+PRODUCT INFORMATION TO USE:
 Product Name: {product_data.get('Title', product_data.get('name', 'Unknown Product'))}
 Rating: {product_data.get('Rating', product_data.get('rating', 'N/A'))}/5 stars
-Review Count: {product_data.get('ReviewsCount', product_data.get('reviews_count', 'N/A'))} reviews
-Price: {product_data.get('Price', product_data.get('price', 'N/A'))}
-Sales Rank: {product_data.get('SalesRank', product_data.get('sales_rank', 'N/A'))}
-ASIN: {product_data.get('ASIN', product_data.get('asin', 'N/A'))}{feature_text}
+Review Count: {product_data.get('ReviewsCount', product_data.get('review_count', 'N/A'))} reviews
+Price: {product_data.get('Price', product_data.get('price', 'N/A'))}{feature_text}
+---
 """
+            # Enhanced prompt that tells the AI to do everything
+            enhanced_prompt = (
+                f"{base_prompt}\n\n"
+                "INSTRUCTIONS:\n"
+                "1. Take the 'PRODUCT INFORMATION' provided and the 'BASE CONTENT' style guide.\n"
+                "2. Create a complete, engaging social media post.\n"
+                "3. IMPORTANT: The entire response, including hashtags, MUST be in the target language.\n"
+                "4. Naturally integrate the key features, price, and rating into the post.\n"
+                "5. End the post with a set of relevant, translated hashtags.\n"
+                "6. Do not include a placeholder for the link; it will be added later.\n\n"
+                f"{product_info}\n\n"
+                f"BASE CONTENT (use this as a style guide for the tone):\n{base_content}"
+            )
+            
+            # Use the LLM to generate the full post
+            response = await self.llm_client.rewrite_text(enhanced_prompt, "", language=language, char_limit=800)
 
-            # Enhanced prompt that includes product data and requests hashtags
-            enhanced_prompt = f"""{base_prompt}
-
-Product Information:
-{product_info}
-
-Base Content: {base_content}
-
-Please rewrite this content to be engaging and persuasive for social media, and naturally include the price and key features. Include relevant hashtags at the end of your response. Make sure the content highlights the product's key features, rating, and value proposition."""
-
-            # Use the LLM to generate content with hashtags
-            response = await self.llm_client.rewrite_text(enhanced_prompt, base_content, language=language, char_limit=900)
-
-            if response:
-                # Try to separate content and hashtags
-                # Look for hashtags at the end (starting with #)
-                lines = response.strip().split('\n')
-                content_lines = []
-                hashtag_lines = []
-
-                # Find where hashtags start
-                for i, line in enumerate(lines):
-                    if line.strip().startswith('#'):
-                        hashtag_lines = lines[i:]
-                        content_lines = lines[:i]
-                        break
-                else:
-                    # No hashtags found, use whole response as content
-                    content_lines = lines
-                    hashtag_lines = []
-
-                final_content = '\n'.join(content_lines).strip()
-                hashtags = ' '.join(hashtag_lines).strip() if hashtag_lines else ''
-
-                return final_content, hashtags
-            else:
-                return None, ''
+            return response.strip() if response else None
 
         except Exception as e:
-            bot_logger.log_error("ContentGenerator", e, "AI content generation with product data failed")
-            return None, ''
-
-    async def _translate_to_russian(self, content: str) -> str:
-        """Translate content to Russian using AI."""
-        try:
-            if not content or content.strip() == '':
-                return content
-
-            translation_prompt = f"""Translate the following Italian product description to Russian. Keep the structure and formatting intact, but translate all text to Russian. Maintain any emojis, special characters, and formatting:
-
-{content}
-
-Provide only the Russian translation, nothing else."""
-
-            translated = await self.llm_client.rewrite_text(translation_prompt, content)
-            if translated and len(translated.strip()) > 0:
-                return translated.strip()
-            else:
-                # Fallback: return original content if translation fails
-                bot_logger.log_error("ContentGenerator", Exception("Russian translation failed"), f"Returning original content: {content[:100]}...")
-                return content
-
-        except Exception as e:
-            bot_logger.log_error("ContentGenerator", e, f"Russian translation failed for content: {content[:100]}...")
-            return content
-
-    async def _translate_hashtags_to_russian(self, hashtags: str) -> str:
-        """Translate hashtags to Russian equivalents."""
-        try:
-            if not hashtags or hashtags.strip() == '':
-                return '#Продукт #Партнер'
-
-            # Common hashtag translations
-            hashtag_translations = {
-                '#Deal': '#Скидка',
-                '#Product': '#Продукт',
-                '#Affiliate': '#Партнер',
-                '#Shopping': '#Покупки',
-                '#Amazon': '#Амазон',
-                '#Sale': '#Распродажа',
-                '#Discount': '#Скидка',
-                '#Offer': '#Предложение',
-                '#Buy': '#Купить',
-                '#Shop': '#Магазин',
-                '#Price': '#Цена',
-                '#Quality': '#Качество',
-                '#Best': '#Лучший',
-                '#New': '#Новый',
-                '#Great': '#Отличный'
-            }
-
-            # Split hashtags and translate each one
-            hashtag_list = hashtags.split()
-            translated_hashtags = []
-
-            for hashtag in hashtag_list:
-                hashtag = hashtag.strip()
-                if hashtag in hashtag_translations:
-                    translated_hashtags.append(hashtag_translations[hashtag])
-                else:
-                    # For unknown hashtags, try AI translation
-                    try:
-                        translation_prompt = f"Translate this English hashtag to Russian: {hashtag}. Provide only the Russian hashtag starting with #, nothing else."
-                        translated = await self.llm_client.rewrite_text(translation_prompt, hashtag)
-                        if translated and translated.startswith('#'):
-                            translated_hashtags.append(translated.strip())
-                        else:
-                            translated_hashtags.append(hashtag)  # Keep original if translation fails
-                    except:
-                        translated_hashtags.append(hashtag)  # Keep original if translation fails
-
-            return ' '.join(translated_hashtags)
-
-        except Exception as e:
-            bot_logger.log_error("ContentGenerator", e, f"Hashtag translation failed for: {hashtags}")
-            return '#Продукт #Партнер'
+            bot_logger.log_error("ContentGenerator", e, "AI full post generation failed")
+            return None
 
     async def generate_post_content(self, product_data: Dict[str, Any], language: str = 'en') -> Optional[Dict[str, str]]:
         """

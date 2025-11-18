@@ -381,14 +381,10 @@ class PostManager:
 
         # --- Format Final Content ---
         text_content = content_result['text']
-        hashtags = content_result.get('hashtags', '')
 
         # Add affiliate link to content
         if final_link:
             text_content += f"\n\n🔗 [Shop Now]({final_link})"
-
-        if hashtags:
-            text_content += f"\n\n{hashtags}"
 
         # --- Posting with Watermark ---
         # Truncate content to Telegram's caption limit (1024 chars)
@@ -551,14 +547,10 @@ class PostManager:
 
         # --- Format Final Content ---
         text_content = content_result['text']
-        hashtags = content_result.get('hashtags', '')
 
         # Add affiliate link to content
         if final_link:
             text_content += f"\n\n🔗 [Shop Now]({final_link})"
-
-        if hashtags:
-            text_content += f"\n\n{hashtags}"
 
         # --- Posting with Watermark ---
         # Truncate content to Telegram's caption limit (1024 chars)

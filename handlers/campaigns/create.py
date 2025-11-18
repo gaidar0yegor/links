@@ -617,8 +617,8 @@ async def toggle_selection(callback: CallbackQuery, state: FSMContext):
 
         # Определяем нужный back_callback
         if key == 'channels': back_callback = "back_to_campaign_menu"
-        elif key == 'categories': back_callback = "campaign_done_channels"
-        elif key == 'subcategories': back_callback = "campaign_done_categories"
+        elif key == 'categories': back_callback = "campaign_new_start" # Go back to the start of channel selection
+        elif key == 'subcategories': back_callback = "campaign_done_channels" # Go back to the start of category selection
 
     await callback.message.edit_reply_markup(
         reply_markup=get_multiselect_keyboard(

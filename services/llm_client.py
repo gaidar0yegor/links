@@ -50,7 +50,7 @@ class OpenAIClient:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": full_prompt}
                 ],
-                "max_tokens": 250,
+                "max_tokens": 350,
                 "temperature": 0.7
             }
 

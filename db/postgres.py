@@ -83,6 +83,7 @@ async def setup_db(conn):
             image_url TEXT,
             affiliate_link TEXT,
             browse_node_ids INTEGER[] DEFAULT '{}',
+            features TEXT[] DEFAULT '{}',
             quality_score INTEGER, -- Sales rank as quality score (lower = better)
             status VARCHAR(20) DEFAULT 'queued', -- 'queued', 'posted', 'rejected'
             discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -95,6 +96,7 @@ async def setup_db(conn):
     await conn.execute("ALTER TABLE product_queue ADD COLUMN IF NOT EXISTS discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
     await conn.execute("ALTER TABLE product_queue ADD COLUMN IF NOT EXISTS posted_at TIMESTAMP;")
     await conn.execute("ALTER TABLE product_queue ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
+    await conn.execute("ALTER TABLE product_queue ADD COLUMN IF NOT EXISTS features TEXT[] DEFAULT '{}';")
 
     # Индексы для производительности
     await conn.execute("""
