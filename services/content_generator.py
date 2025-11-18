@@ -222,35 +222,6 @@ class ContentGenerator:
                 content = await self._translate_to_russian(content)
                 hashtags = await self._translate_hashtags_to_russian(hashtags)
 
-            # FINAL PRICE GUARANTEE: Ensure price is always included in the final content
-            print(f"DEBUG: Final guarantee start - price = '{price}', content length = {len(content)}")
-            try:
-                if price and price != '':
-                    lines = content.split('\n')
-                    print(f"DEBUG: Final guarantee - content has {len(lines)} lines before processing")
-                    # Remove any existing price lines to avoid duplicates
-                    original_lines = len(lines)
-                    lines = [line for line in lines if not (line.startswith('💰') or 'Price:' in line)]
-                    removed_lines = original_lines - len(lines)
-                    print(f"DEBUG: Final guarantee - removed {removed_lines} existing price lines")
-                    # Insert price after the title (first line)
-                    if lines:
-                        lines.insert(1, f'💰 **Price: {price}**')
-                        content = '\n'.join(lines)
-                        print(f"DEBUG: Final guarantee - inserted price, content now has {len(lines)} lines")
-                        print(f"DEBUG: Final guarantee - content after insertion: '{content[:300]}...'")
-                    else:
-                        print(f"DEBUG: Final guarantee - no lines to insert into")
-                else:
-                    print(f"DEBUG: Final guarantee - price is empty or None, skipping")
-                print(f"DEBUG: Final guarantee end - final content preview: '{content[:200]}...'")
-            except Exception as e:
-                print(f"DEBUG: Final guarantee ERROR: {e}")
-                # Emergency fallback: prepend price to content
-                if price and price != '':
-                    content = f'💰 **Price: {price}**\n\n{content}'
-                    print(f"DEBUG: Final guarantee emergency fallback applied")
-
             return {
                 'content': content,
                 'hashtags': hashtags,
@@ -270,16 +241,21 @@ class ContentGenerator:
             if rewrite_prompt_data and len(rewrite_prompt_data) > 1:
                 base_prompt = rewrite_prompt_data[1][0]  # First row, first column
             else:
-                base_prompt = "Rewrite the following text to make it engaging and persuasive and fit for a social media post."
+                base_prompt = "Rewrite the following text to make it engaging and persuasive for a social media post."
 
-            # Build comprehensive product information
+            # Build comprehensive product information, including features
+            features = product_data.get('features') or product_data.get('Features', [])
+            feature_text = ""
+            if features and isinstance(features, list) and len(features) > 0:
+                feature_text = "\nKey Features:\n" + "\n".join(f"- {feature.strip()}" for feature in features[:3])
+
             product_info = f"""
 Product Name: {product_data.get('Title', product_data.get('name', 'Unknown Product'))}
 Rating: {product_data.get('Rating', product_data.get('rating', 'N/A'))}/5 stars
 Review Count: {product_data.get('ReviewsCount', product_data.get('reviews_count', 'N/A'))} reviews
 Price: {product_data.get('Price', product_data.get('price', 'N/A'))}
 Sales Rank: {product_data.get('SalesRank', product_data.get('sales_rank', 'N/A'))}
-ASIN: {product_data.get('ASIN', product_data.get('asin', 'N/A'))}
+ASIN: {product_data.get('ASIN', product_data.get('asin', 'N/A'))}{feature_text}
 """
 
             # Enhanced prompt that includes product data and requests hashtags
@@ -290,10 +266,10 @@ Product Information:
 
 Base Content: {base_content}
 
-Please rewrite this content to be engaging and persuasive for social media. Include relevant hashtags at the end of your response. Make sure the content highlights the product's key features, rating, and value proposition."""
+Please rewrite this content to be engaging and persuasive for social media, and naturally include the price and key features. Include relevant hashtags at the end of your response. Make sure the content highlights the product's key features, rating, and value proposition."""
 
             # Use the LLM to generate content with hashtags
-            response = await self.llm_client.rewrite_text(enhanced_prompt, base_content, language=language, char_limit=500)
+            response = await self.llm_client.rewrite_text(enhanced_prompt, base_content, language=language, char_limit=900)
 
             if response:
                 # Try to separate content and hashtags

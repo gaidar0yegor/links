@@ -382,12 +382,6 @@ class PostManager:
         # --- Format Final Content ---
         text_content = content_result['text']
         hashtags = content_result.get('hashtags', '')
-        features = content_result.get('features', [])
-
-        # Add features as bullet points
-        if features:
-            feature_bullets = "\n\n" + "\n".join(f"• {feature.strip()}" for feature in features[:3])
-            text_content += feature_bullets
 
         # Add affiliate link to content
         if final_link:
@@ -558,12 +552,6 @@ class PostManager:
         # --- Format Final Content ---
         text_content = content_result['text']
         hashtags = content_result.get('hashtags', '')
-        features = content_result.get('features', [])
-
-        # Add features as bullet points
-        if features:
-            feature_bullets = "\n\n" + "\n".join(f"• {feature.strip()}" for feature in features[:3])
-            text_content += feature_bullets
 
         # Add affiliate link to content
         if final_link:
