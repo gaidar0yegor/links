@@ -276,7 +276,7 @@ async def done_select_all_subcategories(callback: CallbackQuery, state: FSMConte
             done_callback="campaign_done_rating",
             back_callback="campaign_done_categories"
         )
-    )
+            )
     await callback.answer()
 
 # --- REMOVED: Redundant handler that conflicts with subcategories flow ---

@@ -234,7 +234,7 @@ Price: {product_data.get('Price', product_data.get('price', 'N/A'))}{feature_tex
                 "5. End the post with a set of relevant, translated hashtags.\n"
                 "6. Do not include a placeholder for the link; it will be added later.\n\n"
                 f"{product_info}\n\n"
-                f"BASE CONTENT (use this as a style guide for the tone):\n{base_content}"
+                f"BASE CONTENT (use this as a style guide for the tone but do not just copy the structure directly):\n{base_content}"
             )
             
             # Use the LLM to generate the full post
