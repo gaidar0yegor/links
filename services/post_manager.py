@@ -47,28 +47,46 @@ class PostManager:
             return data[1][0]
         return "Rewrite the following text to make it engaging and persuasive and fit for a social media post."
 
-    def _add_watermark(self, image_url: str, watermark_text: str = "AFFILIATE") -> BytesIO | None:
-        """Скачивает изображение, накладывает водяной знак и возвращает BytesIO."""
+    def _add_watermark(self, image_url: str, channel_name: str) -> BytesIO | None:
+        """Скачивает изображение, накладывает водяной знак с названием канала и возвращает BytesIO."""
         try:
             # 1. Загрузка
             response = requests.get(image_url, timeout=10)
             img = Image.open(BytesIO(response.content)).convert("RGBA")
 
-            # 2. Наложение текста (Упрощенная реализация)
+            # 2. Наложение текста (Улучшенная реализация с большим шрифтом)
             txt = Image.new('RGBA', img.size, (255, 255, 255, 0))
             draw = ImageDraw.Draw(txt)
-            font = ImageFont.load_default() # Используем дефолтный для минимальных затрат
 
-            # Позиция: нижний правый угол
-            text_x = img.width - draw.textlength(watermark_text, font=font) - 10
-            text_y = img.height - 20
+            # Используем больший шрифт (масштабируемый по размеру изображения)
+            font_size = max(20, min(img.width, img.height) // 30)  # Минимум 20px, масштабируется
+            try:
+                font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size)
+            except:
+                # Fallback to default if truetype not available
+                font = ImageFont.load_default()
 
-            draw.text((text_x, text_y), watermark_text, fill=(255, 255, 255, 128), font=font)
+            # Позиция: нижний правый угол с отступом
+            text_bbox = draw.textbbox((0, 0), channel_name, font=font)
+            text_width = text_bbox[2] - text_bbox[0]
+            text_height = text_bbox[3] - text_bbox[1]
+
+            text_x = img.width - text_width - 20
+            text_y = img.height - text_height - 20
+
+            # Полупрозрачный белый текст с черной обводкой для лучшей видимости
+            # Сначала рисуем черную обводку
+            for offset_x, offset_y in [(-1, -1), (-1, 1), (1, -1), (1, 1)]:
+                draw.text((text_x + offset_x, text_y + offset_y), channel_name, fill=(0, 0, 0, 180), font=font)
+
+            # Затем белый текст
+            draw.text((text_x, text_y), channel_name, fill=(255, 255, 255, 220), font=font)
+
             combined = Image.alpha_composite(img, txt)
 
             # 3. Сохранение в BytesIO
             output = BytesIO()
-            combined.convert("RGB").save(output, format="JPEG")
+            combined.convert("RGB").save(output, format="JPEG", quality=95)
             output.seek(0)
             return output
 
@@ -196,23 +214,48 @@ class PostManager:
                         print(f"DEBUG: {len(available_products)} products available after filtering")
 
                         if available_products:
-                            # Pick a random available product
-                            import random
-                            selected_product = random.choice(available_products)
-                            print(f"DEBUG: Selected new product: {selected_product.get('title', 'Unknown')} (ASIN: {selected_product.get('asin')})")
+                            # Filter for quality products with essential data (price + title)
+                            quality_products = []
+                            for product in available_products:
+                                # Check if product has essential data: price and title
+                                has_price = product.get('price') is not None and product.get('price') > 0
+                                has_title = product.get('title') and product.get('title').strip()
 
-                            # Convert to the format expected by the rest of the system
-                            product_data = {
-                                'ASIN': selected_product.get('asin', ''),
-                                'Title': selected_product.get('title', ''),
-                                'ImageURL': selected_product.get('image_url', ''),
-                                'AffiliateLink': selected_product.get('affiliate_link', ''),
-                                'Price': f"€{selected_product.get('price', 0):.2f}" if selected_product.get('price') else '',
-                                'Rating': str(selected_product.get('rating', '')),
-                                'ReviewsCount': str(selected_product.get('review_count', '')),
-                                'SalesRank': str(selected_product.get('sales_rank', ''))
-                            }
-                            print(f"DEBUG: Successfully selected product from enhanced search")
+                                # Optional data (nice to have but not required)
+                                has_rating = product.get('rating') is not None and product.get('rating') > 0
+                                has_sales_rank = product.get('sales_rank') is not None and product.get('sales_rank') > 0
+                                has_features = (product.get('features') and
+                                              isinstance(product.get('features'), list) and
+                                              len(product.get('features', [])) > 0)
+
+                                if has_price and has_title:
+                                    quality_products.append(product)
+                                    print(f"DEBUG: Quality product found: {product.get('title', 'Unknown')} (ASIN: {product.get('asin')}) - Price: €{product.get('price')}, Rating: {has_rating}, Rank: {has_sales_rank}, Features: {has_features}")
+                                else:
+                                    print(f"DEBUG: Skipping incomplete product: {product.get('title', 'Unknown')} (ASIN: {product.get('asin')}) - Price: {has_price}, Title: {bool(has_title)}")
+
+                            if quality_products:
+                                # Pick a random quality product
+                                import random
+                                selected_product = random.choice(quality_products)
+                                print(f"DEBUG: Selected quality product: {selected_product.get('title', 'Unknown')} (ASIN: {selected_product.get('asin')})")
+
+                                # Convert to the format expected by the rest of the system
+                                product_data = {
+                                    'ASIN': selected_product.get('asin', ''),
+                                    'Title': selected_product.get('title', ''),
+                                    'ImageURL': selected_product.get('image_url', ''),
+                                    'AffiliateLink': selected_product.get('affiliate_link', ''),
+                                    'Price': f"€{selected_product.get('price', 0):.2f}" if selected_product.get('price') else '',
+                                    'Rating': str(selected_product.get('rating', '')),
+                                    'ReviewsCount': str(selected_product.get('review_count', '')),
+                                    'SalesRank': str(selected_product.get('sales_rank', '')),
+                                    'features': selected_product.get('features', [])
+                                }
+                                print(f"DEBUG: Successfully selected quality product from enhanced search")
+                            else:
+                                print(f"DEBUG: No quality products found with complete data")
+                                product_data = None
                         else:
                             print(f"DEBUG: No products available after filtering posted ASINs")
                     else:
@@ -277,10 +320,26 @@ class PostManager:
 
             if not content_result:
                 print(f"⚠️  Content generation failed, using fallback for campaign {campaign['name']}")
-                # Fallback content
+                # Enhanced fallback content with available product data
                 title = product_data.get('Title', 'Amazing Product')
+                rating = product_data.get('Rating', '')
+                reviews = product_data.get('ReviewsCount', '')
+                price = product_data.get('Price', '')
+
+                # Build enhanced fallback text
+                text_parts = [f"✨ **GREAT DEAL!** {title}"]
+
+                if rating and rating != 'None':
+                    text_parts.append(f"⭐ **{rating}/5 stars**")
+                if reviews and reviews != 'None':
+                    text_parts.append(f"📊 **{reviews} reviews**")
+                if price and price != 'None':
+                    text_parts.append(f"💰 **Price: {price}**")
+
+                text_parts.append("\nCheck out this amazing product!")
+
                 content_result = {
-                    'text': f"✨ **GREAT DEAL!** {title}\n\nCheck out this amazing product!",
+                    'text': '\n'.join(text_parts),
                     'hashtags': '#Deal #Product #Affiliate',
                     'product_link': product_data.get('AffiliateLink', ''),
                     'product_image': product_data.get('ImageURL', '')
@@ -323,12 +382,12 @@ class PostManager:
 
         # --- Posting with Watermark ---
         image_url = content_result.get('product_image') or product_data.get('ImageURL', '')
-        image_stream = self._add_watermark(image_url, watermark_text="AFFILIATE") if image_url else None
-
         channels = params.get('channels', [])
         successful_posts = 0
 
         for channel_name in channels:
+            # Create watermark with channel name for each channel
+            image_stream = self._add_watermark(image_url, channel_name) if image_url else None
             try:
                 if image_stream:
                     image_stream.seek(0)
@@ -376,6 +435,16 @@ class PostManager:
         """
         print(f"📦 Posting queued product: {product_data.get('asin', 'Unknown')} - {product_data.get('title', 'Unknown')[:50]}...")
 
+        # Quality check: ensure product has essential data (price + title) before posting
+        has_price = product_data.get('price') is not None and product_data.get('price') > 0
+        has_title = product_data.get('title') and product_data.get('title').strip()
+
+        if not (has_price and has_title):
+            print(f"⚠️  Skipping queued product {product_data.get('asin')} - missing essential data: Price: {has_price}, Title: {bool(has_title)}")
+            return
+
+        print(f"✅ Quality check passed for queued product {product_data.get('asin')}")
+
         try:
             # Import enhanced services
             from services.content_generator import content_generator
@@ -387,16 +456,18 @@ class PostManager:
         campaign_id = campaign.get('id')
         params = campaign.get('params', {})
 
-        # Convert product data to the format expected by content generator
+        # Use enriched product data directly - content generator now handles multiple formats
         formatted_product_data = {
-            'ASIN': product_data.get('asin', ''),
-            'Title': product_data.get('title', ''),
-            'ImageURL': product_data.get('image_url', ''),
-            'AffiliateLink': product_data.get('affiliate_link', ''),
-            'Price': str(product_data.get('price', '')) if product_data.get('price') else '',
-            'Rating': str(product_data.get('rating', '')) if product_data.get('rating') else '',
-            'ReviewsCount': str(product_data.get('review_count', '')) if product_data.get('review_count') else '',
-            'SalesRank': str(product_data.get('sales_rank', '')) if product_data.get('sales_rank') else ''
+            'asin': product_data.get('asin', ''),
+            'title': product_data.get('title', ''),
+            'image_url': product_data.get('image_url', ''),
+            'affiliate_link': product_data.get('affiliate_link', ''),
+            'price': product_data.get('price'),  # Keep as numeric for better formatting
+            'rating': product_data.get('rating'),  # Keep as numeric for better formatting
+            'review_count': product_data.get('review_count'),  # Keep as numeric for better formatting
+            'sales_rank': product_data.get('sales_rank'),  # Keep as numeric for better formatting
+            'description': product_data.get('description', ''),
+            'features': product_data.get('features', [])
         }
 
         # --- Content Generation ---
@@ -405,10 +476,26 @@ class PostManager:
 
             if not content_result:
                 print(f"⚠️  Content generation failed for queued product, using fallback")
-                # Fallback content
+                # Enhanced fallback content with available product data
                 title = formatted_product_data.get('Title', 'Amazing Product')
+                rating = formatted_product_data.get('Rating', '')
+                reviews = formatted_product_data.get('ReviewsCount', '')
+                price = formatted_product_data.get('Price', '')
+
+                # Build enhanced fallback text
+                text_parts = [f"✨ **GREAT DEAL!** {title}"]
+
+                if rating and rating != 'None' and rating != '':
+                    text_parts.append(f"⭐ **{rating}/5 stars**")
+                if reviews and reviews != 'None' and reviews != '':
+                    text_parts.append(f"📊 **{reviews} reviews**")
+                if price and price != 'None' and price != '':
+                    text_parts.append(f"💰 **Price: {price}**")
+
+                text_parts.append("\nCheck out this amazing product!")
+
                 content_result = {
-                    'text': f"✨ **GREAT DEAL!** {title}\n\nCheck out this amazing product!",
+                    'text': '\n'.join(text_parts),
                     'hashtags': '#Deal #Product #Affiliate',
                     'product_link': formatted_product_data.get('AffiliateLink', ''),
                     'product_image': formatted_product_data.get('ImageURL', '')
@@ -451,12 +538,12 @@ class PostManager:
 
         # --- Posting with Watermark ---
         image_url = content_result.get('product_image') or formatted_product_data.get('ImageURL', '')
-        image_stream = self._add_watermark(image_url, watermark_text="AFFILIATE") if image_url else None
-
         channels = params.get('channels', [])
         successful_posts = 0
 
         for channel_name in channels:
+            # Create watermark with channel name for each channel
+            image_stream = self._add_watermark(image_url, channel_name) if image_url else None
             try:
                 if image_stream:
                     image_stream.seek(0)

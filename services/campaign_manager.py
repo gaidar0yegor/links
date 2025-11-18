@@ -295,10 +295,11 @@ class CampaignManager:
         Returns the most recent posted ASINs (up to limit).
         """
         query = """
-        SELECT DISTINCT asin
+        SELECT asin
         FROM statistics_log
         WHERE campaign_id = $1 AND asin IS NOT NULL AND asin != ''
-        ORDER BY post_time DESC
+        GROUP BY asin
+        ORDER BY MAX(post_time) DESC
         LIMIT $2;
         """
         async with self.db_pool.acquire() as conn:

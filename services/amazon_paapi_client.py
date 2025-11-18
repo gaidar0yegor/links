@@ -347,6 +347,8 @@ class AmazonPAAPIClient:
                         search_index="All",
                         item_count=10,  # Get more results for variety
                         min_reviews_rating=min_rating_int,
+                        # Add price filter to ensure we get products with prices
+                        min_price=500,  # Minimum 5 EUR to filter out free/low-value items
                         resources=[
                             SearchItemsResource.ITEMINFO_TITLE,
                             SearchItemsResource.OFFERS_LISTINGS_PRICE,
@@ -732,6 +734,7 @@ class AmazonPAAPIClient:
                                    fulfilled_by_amazon: Optional[bool] = None, max_results: int = 10) -> List[Dict[str, Any]]:
         """
         Enhanced search that returns multiple products with sales rank information.
+        Uses GetItems API to enrich data with ratings, reviews, and sales rank.
         Used by the product discovery cycle to populate the product queue.
 
         Args:
@@ -753,9 +756,9 @@ class AmazonPAAPIClient:
             return []
 
         try:
-            all_products = []
+            candidate_asins = []
 
-            # Search in each browse node
+            # Phase 1: Search for candidate products using SearchItems
             for node_id in browse_node_ids:
                 try:
                     # Create search request
@@ -765,24 +768,16 @@ class AmazonPAAPIClient:
                         marketplace="www.amazon.it",
                         browse_node_id=node_id,
                         search_index="All",
-                        item_count=min(max_results, 10),  # Amazon limits to 10 per request
+                        item_count=min(max_results * 2, 10),  # Get more candidates for filtering
                         sort_by="Featured",
                         resources=[
                             SearchItemsResource.ITEMINFO_TITLE,
                             SearchItemsResource.OFFERS_LISTINGS_PRICE,
                             SearchItemsResource.IMAGES_PRIMARY_LARGE,
-                            SearchItemsResource.CUSTOMERREVIEWS_COUNT,
-                            SearchItemsResource.CUSTOMERREVIEWS_STARRATING,
-                            SearchItemsResource.BROWSENODEINFO_WEBSITESALESRANK,
-                            SearchItemsResource.OFFERS_LISTINGS_SAVINGBASIS,
                         ],
                     )
 
-                    # Apply filters
-                    if min_rating and min_rating > 0:
-                        min_rating_int = max(1, min(int(min_rating), 5))
-                        search_request.min_reviews_rating = min_rating_int
-
+                    # Apply basic filters
                     if min_price:
                         search_request.min_price = int(min_price * 100)  # Convert to cents
 
@@ -794,12 +789,12 @@ class AmazonPAAPIClient:
 
                     if response and hasattr(response, 'search_result') and response.search_result:
                         items = getattr(response.search_result, 'items', [])
-                        print(f"DEBUG: Found {len(items)} items in browse node {node_id}")
+                        print(f"DEBUG: Found {len(items)} candidate items in browse node {node_id}")
 
                         for item in items:
-                            product_data = self._extract_enhanced_product_data(item)
-                            if product_data:
-                                all_products.append(product_data)
+                            asin = getattr(item, 'asin', '')
+                            if asin:
+                                candidate_asins.append(asin)
 
                     # Rate limiting between requests
                     import time
@@ -812,26 +807,224 @@ class AmazonPAAPIClient:
                     print(f"DEBUG: Exception for browse node {node_id}: {e}")
                     continue
 
-            # Remove duplicates by ASIN and limit results
-            unique_products = []
-            seen_asins = set()
+            # Remove duplicates and limit candidates
+            candidate_asins = list(set(candidate_asins))[:max_results * 2]
 
-            for product in all_products:
-                asin = product.get('asin')
-                if asin and asin not in seen_asins:
-                    unique_products.append(product)
-                    seen_asins.add(asin)
-                    if len(unique_products) >= max_results:
-                        break
+            if not candidate_asins:
+                print("DEBUG: No candidate ASINs found")
+                return []
 
-            print(f"DEBUG: Returning {len(unique_products)} unique products")
-            return unique_products
+            # Phase 2: Enrich candidate products with detailed data using GetItems
+            enriched_products = await self._enrich_products_batch(candidate_asins)
+
+            # Phase 3: Filter and return products that meet criteria
+            filtered_products = []
+            for product in enriched_products:
+                # Apply rating filter
+                rating = product.get('rating')
+                if min_rating and rating and rating < min_rating:
+                    continue
+
+                # Apply sales rank filter (if available)
+                sales_rank = product.get('sales_rank')
+                if sales_rank and sales_rank > 100000:  # Skip very low-ranked products
+                    continue
+
+                filtered_products.append(product)
+                if len(filtered_products) >= max_results:
+                    break
+
+            print(f"DEBUG: Returning {len(filtered_products)} enriched and filtered products")
+            return filtered_products
 
         except Exception as e:
             print(f"DEBUG: search_items_enhanced failed: {e}")
             import traceback
             traceback.print_exc()
             return []
+
+    async def _enrich_products_batch(self, asins: List[str]) -> List[Dict[str, Any]]:
+        """
+        Enrich a batch of products with detailed data using GetItems API + web scraping fallback.
+        Includes caching to reduce API calls.
+        """
+        if not asins:
+            return []
+
+        enriched_products = []
+
+        # Process in batches of 10 (Amazon API limit)
+        for i in range(0, len(asins), 10):
+            batch_asins = asins[i:i+10]
+
+            try:
+                get_request = GetItemsRequest(
+                    partner_tag=self.associate_tag,
+                    partner_type=PartnerType.ASSOCIATES,
+                    marketplace="www.amazon.it",
+                    item_ids=batch_asins,
+                    resources=[
+                        GetItemsResource.ITEMINFO_TITLE,
+                        GetItemsResource.OFFERS_LISTINGS_PRICE,
+                        GetItemsResource.IMAGES_PRIMARY_LARGE,
+                        GetItemsResource.CUSTOMERREVIEWS_COUNT,
+                        GetItemsResource.CUSTOMERREVIEWS_STARRATING,
+                        GetItemsResource.BROWSENODEINFO_WEBSITESALESRANK,
+                        GetItemsResource.ITEMINFO_FEATURES,
+                        GetItemsResource.OFFERS_LISTINGS_SAVINGBASIS,
+                    ]
+                )
+
+                response = self.api_client.get_items(get_request)
+
+                if response and hasattr(response, 'items_result') and response.items_result:
+                    items = getattr(response.items_result, 'items', [])
+
+                    for item in items:
+                        enriched_data = self._extract_enriched_product_data(item)
+                        if enriched_data:
+                            # Check if we need web scraping fallback for missing data
+                            needs_scraping = (
+                                enriched_data.get('price') is None or
+                                enriched_data.get('rating') is None or
+                                enriched_data.get('review_count') is None or
+                                enriched_data.get('sales_rank') is None
+                            )
+
+                            if needs_scraping:
+                                print(f"DEBUG: API data incomplete for ASIN {enriched_data.get('asin')}, using web scraping fallback")
+                                try:
+                                    from services.amazon_scraper import enrich_product_with_scraping
+                                    enriched_data = await enrich_product_with_scraping(enriched_data)
+                                except Exception as e:
+                                    print(f"DEBUG: Web scraping fallback failed: {e}")
+
+                            enriched_products.append(enriched_data)
+
+                # Rate limiting between batches
+                import time
+                time.sleep(0.2)
+
+            except ApiException as e:
+                print(f"DEBUG: GetItems API Exception for batch {batch_asins[:3]}...: {e.reason}")
+                # Fallback to web scraping for the entire batch
+                try:
+                    from services.amazon_scraper import get_amazon_scraper
+                    scraper = await get_amazon_scraper()
+
+                    for asin in batch_asins:
+                        scraped_data = await scraper.scrape_product_data(asin)
+                        if scraped_data:
+                            # Convert scraped data to enriched format
+                            enriched_data = {
+                                'asin': scraped_data['asin'],
+                                'title': scraped_data.get('title'),
+                                'price': scraped_data.get('price'),
+                                'currency': scraped_data.get('currency', 'EUR'),
+                                'rating': scraped_data.get('rating'),
+                                'review_count': scraped_data.get('review_count'),
+                                'sales_rank': scraped_data.get('sales_rank'),
+                                'image_url': f"https://m.media-amazon.com/images/I/{asin}._SL500_.jpg",  # Default image
+                                'affiliate_link': f"https://www.amazon.it/dp/{asin}?tag={self.associate_tag}",
+                                'features': scraped_data.get('features', []),
+                                'description': scraped_data.get('description')
+                            }
+                            enriched_products.append(enriched_data)
+                            print(f"DEBUG: Used web scraping for ASIN {asin}")
+                except Exception as scrape_e:
+                    print(f"DEBUG: Web scraping fallback also failed: {scrape_e}")
+                continue
+            except Exception as e:
+                print(f"DEBUG: GetItems failed for batch {batch_asins[:3]}...: {e}")
+                continue
+
+        return enriched_products
+
+    def _extract_enriched_product_data(self, item) -> Optional[Dict[str, Any]]:
+        """
+        Extract enriched product data from GetItems API response.
+        This has access to customer reviews and sales rank data.
+        """
+        try:
+            asin = getattr(item, 'asin', '')
+            if not asin:
+                return None
+
+            product_data = {
+                'asin': asin,
+                'title': '',
+                'price': None,
+                'currency': 'EUR',
+                'rating': None,
+                'review_count': None,
+                'sales_rank': None,
+                'image_url': '',
+                'affiliate_link': getattr(item, 'detail_page_url', ''),
+                'features': [],
+                'description': ''
+            }
+
+            # Extract title
+            if hasattr(item, 'item_info') and item.item_info:
+                if hasattr(item.item_info, 'title') and item.item_info.title:
+                    product_data['title'] = getattr(item.item_info.title, 'display_value', '')
+
+            # Extract features/description from API (no scraping needed)
+            if hasattr(item, 'item_info') and item.item_info:
+                if hasattr(item.item_info, 'features') and item.item_info.features:
+                    if hasattr(item.item_info.features, 'display_values') and item.item_info.features.display_values:
+                        features = item.item_info.features.display_values
+                        product_data['features'] = features
+                        # Use first 2-3 features as description
+                        product_data['description'] = ' '.join(features[:3]) if features else ''
+                        print(f"DEBUG: Extracted {len(features)} features from API for ASIN {asin}")
+
+            # Extract price
+            if hasattr(item, 'offers') and item.offers:
+                if hasattr(item.offers, 'listings') and item.offers.listings:
+                    for listing in item.offers.listings:
+                        if hasattr(listing, 'price') and listing.price:
+                            amount = getattr(listing.price, 'amount', None)
+                            currency = getattr(listing.price, 'currency', 'EUR')
+                            if amount is not None:
+                                product_data['price'] = float(amount) / 100  # Convert from cents
+                                product_data['currency'] = currency
+                            break
+
+            # Extract rating and review count (available in GetItems)
+            if hasattr(item, 'item_info') and item.item_info:
+                if hasattr(item.item_info, 'product_info') and item.item_info.product_info:
+                    if hasattr(item.item_info.product_info, 'customer_reviews') and item.item_info.product_info.customer_reviews:
+                        reviews = item.item_info.product_info.customer_reviews
+                        if hasattr(reviews, 'count') and reviews.count:
+                            product_data['review_count'] = int(reviews.count)
+                        if hasattr(reviews, 'star_rating') and reviews.star_rating:
+                            if hasattr(reviews.star_rating, 'rating') and reviews.star_rating.rating:
+                                product_data['rating'] = float(reviews.star_rating.rating)
+
+            # Extract sales rank (available in GetItems)
+            if hasattr(item, 'browse_node_info') and item.browse_node_info:
+                if hasattr(item.browse_node_info, 'website_sales_rank') and item.browse_node_info.website_sales_rank:
+                    sales_rank_data = item.browse_node_info.website_sales_rank
+                    if isinstance(sales_rank_data, dict):
+                        product_data['sales_rank'] = sales_rank_data.get('sales_rank')
+                    elif hasattr(sales_rank_data, 'sales_rank'):
+                        product_data['sales_rank'] = sales_rank_data.sales_rank
+
+            # Extract image
+            if hasattr(item, 'images') and item.images:
+                if hasattr(item.images, 'primary') and item.images.primary:
+                    if hasattr(item.images.primary, 'large') and item.images.primary.large:
+                        product_data['image_url'] = getattr(item.images.primary.large, 'url', '')
+
+            # Debug logging
+            print(f"DEBUG: Enriched product {asin}: rating={product_data['rating']}, reviews={product_data['review_count']}, sales_rank={product_data['sales_rank']}, price={product_data['price']}")
+
+            return product_data
+
+        except Exception as e:
+            print(f"DEBUG: Failed to extract enriched product data: {e}")
+            return None
 
     def _extract_enhanced_product_data(self, item) -> Optional[Dict[str, Any]]:
         """
@@ -871,25 +1064,79 @@ class AmazonPAAPIClient:
                                 product_data['currency'] = currency
                             break
 
-            # Extract rating and review count
-            if hasattr(item, 'item_info') and item.item_info:
-                if hasattr(item.item_info, 'product_info') and item.item_info.product_info:
-                    if hasattr(item.item_info.product_info, 'customer_reviews') and item.item_info.product_info.customer_reviews:
-                        reviews = item.item_info.product_info.customer_reviews
-                        if hasattr(reviews, 'count') and reviews.count:
-                            product_data['review_count'] = reviews.count
-                        if hasattr(reviews, 'star_rating') and reviews.star_rating:
-                            if hasattr(reviews.star_rating, 'rating') and reviews.star_rating.rating:
-                                product_data['rating'] = float(reviews.star_rating.rating)
+            # Extract rating and review count - try multiple paths for SearchItems API
+            # SearchItems API may have different structure than GetItems API
+            try:
+                # Try direct customer_reviews access first
+                if hasattr(item, 'customer_reviews') and item.customer_reviews:
+                    reviews = item.customer_reviews
+                    if hasattr(reviews, 'count') and reviews.count:
+                        product_data['review_count'] = int(reviews.count)
+                    if hasattr(reviews, 'star_rating') and reviews.star_rating:
+                        if hasattr(reviews.star_rating, 'rating') and reviews.star_rating.rating:
+                            product_data['rating'] = float(reviews.star_rating.rating)
 
-            # Extract sales rank
-            if hasattr(item, 'browse_node_info') and item.browse_node_info:
-                if hasattr(item.browse_node_info, 'website_sales_rank') and item.browse_node_info.website_sales_rank:
-                    sales_rank_data = item.browse_node_info.website_sales_rank
-                    if isinstance(sales_rank_data, dict):
-                        product_data['sales_rank'] = sales_rank_data.get('sales_rank')
-                    elif hasattr(sales_rank_data, 'sales_rank'):
-                        product_data['sales_rank'] = sales_rank_data.sales_rank
+                # Fallback to item_info.product_info path
+                elif hasattr(item, 'item_info') and item.item_info:
+                    if hasattr(item.item_info, 'product_info') and item.item_info.product_info:
+                        if hasattr(item.item_info.product_info, 'customer_reviews') and item.item_info.product_info.customer_reviews:
+                            reviews = item.item_info.product_info.customer_reviews
+                            if hasattr(reviews, 'count') and reviews.count:
+                                product_data['review_count'] = int(reviews.count)
+                            if hasattr(reviews, 'star_rating') and reviews.star_rating:
+                                if hasattr(reviews.star_rating, 'rating') and reviews.star_rating.rating:
+                                    product_data['rating'] = float(reviews.star_rating.rating)
+
+                # If still no data, try to get from any available customer review info
+                if product_data['rating'] is None or product_data['review_count'] is None:
+                    # Try to access customer reviews from any available location
+                    if hasattr(item, 'item_info') and item.item_info:
+                        # Look for any customer review related data
+                        item_info_dict = item.item_info.to_dict() if hasattr(item.item_info, 'to_dict') else {}
+                        customer_reviews = item_info_dict.get('customer_reviews', {})
+
+                        if customer_reviews:
+                            if 'count' in customer_reviews and customer_reviews['count']:
+                                product_data['review_count'] = int(customer_reviews['count'])
+                            if 'star_rating' in customer_reviews and customer_reviews['star_rating']:
+                                rating_data = customer_reviews['star_rating']
+                                if isinstance(rating_data, dict) and 'rating' in rating_data:
+                                    product_data['rating'] = float(rating_data['rating'])
+                                elif hasattr(rating_data, 'rating'):
+                                    product_data['rating'] = float(rating_data.rating)
+
+            except Exception as e:
+                print(f"DEBUG: Failed to extract rating/review data: {e}")
+
+            # Extract sales rank - try multiple paths
+            try:
+                # Try direct browse_node_info access
+                if hasattr(item, 'browse_node_info') and item.browse_node_info:
+                    if hasattr(item.browse_node_info, 'website_sales_rank') and item.browse_node_info.website_sales_rank:
+                        sales_rank_data = item.browse_node_info.website_sales_rank
+                        if isinstance(sales_rank_data, dict):
+                            product_data['sales_rank'] = sales_rank_data.get('sales_rank')
+                        elif hasattr(sales_rank_data, 'sales_rank'):
+                            product_data['sales_rank'] = sales_rank_data.sales_rank
+                        else:
+                            # Try to convert to dict and extract
+                            sales_rank_dict = sales_rank_data.to_dict() if hasattr(sales_rank_data, 'to_dict') else {}
+                            product_data['sales_rank'] = sales_rank_dict.get('sales_rank')
+
+                # Fallback: try to get from item_info
+                if product_data['sales_rank'] is None and hasattr(item, 'item_info') and item.item_info:
+                    item_info_dict = item.item_info.to_dict() if hasattr(item.item_info, 'to_dict') else {}
+                    browse_node_info = item_info_dict.get('browse_node_info', {})
+
+                    if browse_node_info and 'website_sales_rank' in browse_node_info:
+                        sales_rank_data = browse_node_info['website_sales_rank']
+                        if isinstance(sales_rank_data, dict):
+                            product_data['sales_rank'] = sales_rank_data.get('sales_rank')
+                        elif hasattr(sales_rank_data, 'sales_rank'):
+                            product_data['sales_rank'] = sales_rank_data.sales_rank
+
+            except Exception as e:
+                print(f"DEBUG: Failed to extract sales rank: {e}")
 
             # Extract image
             if hasattr(item, 'images') and item.images:
@@ -897,10 +1144,15 @@ class AmazonPAAPIClient:
                     if hasattr(item.images.primary, 'large') and item.images.primary.large:
                         product_data['image_url'] = getattr(item.images.primary.large, 'url', '')
 
+            # Debug logging
+            print(f"DEBUG: Extracted product {asin}: rating={product_data['rating']}, reviews={product_data['review_count']}, sales_rank={product_data['sales_rank']}")
+
             return product_data
 
         except Exception as e:
             print(f"DEBUG: Failed to extract product data: {e}")
+            import traceback
+            traceback.print_exc()
             return None
 
     def _get_fallback_mock_data(self, keywords: str, min_rating: float = 0.0) -> Optional[Dict[str, Any]]:

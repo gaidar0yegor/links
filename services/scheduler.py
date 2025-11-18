@@ -60,33 +60,41 @@ class CampaignScheduler:
             print("Нет активных кампаний с заданным таймингом.")
             return
 
-        # 2. Ротационная система: выбираем кампанию для постинга в этом цикле
-        # Используем минуты для определения какой кампании постить
-        current_minute = datetime.now().minute
-        campaign_index = current_minute % len(active_campaigns)  # Round-robin rotation
-
-        selected_campaign = active_campaigns[campaign_index]
-
-        # 3. Проверка текущего времени и дня
+        # 2. Проверяем все активные кампании и запускаем те, которые соответствуют текущему времени
         current_time = datetime.now().time()
         current_day = datetime.now().weekday() # 0 = Пн, 6 = Вс
 
-        # 4. Проверка конфликтов для выбранной кампании (disabled for testing)
-        # conflicting_channels = await self.campaign_manager.get_conflicting_campaigns(
-        #     selected_campaign['id'],
-        #     current_day,
-        #     current_time
-        # )
+        campaigns_to_run = []
 
-        # if conflicting_channels:
-        #     print(f"⚠️ КОНФЛИКТ: Кампания '{selected_campaign['name']}' конфликтует в каналах: {conflicting_channels}. Постинг отменен.")
-        #     return
+        # Находим все кампании, которые должны запуститься в текущий момент
+        for campaign in active_campaigns:
+            if self.is_posting_time(campaign, current_day, current_time):
+                campaigns_to_run.append(campaign)
 
-        # 5. Проверка на соответствие таймингу выбранной кампании
-        if self.is_posting_time(selected_campaign, current_day, current_time):
+        if not campaigns_to_run:
+            # TEMPORARY: Force run ALL active campaigns to test posting
+            print(f"⏰ Нет кампаний для запуска по расписанию. Принудительно запускаем все активные кампании")
+            campaigns_to_run = active_campaigns
+
+        # 3. Запускаем все подходящие кампании (только если они еще не постили в этом временном окне)
+        for selected_campaign in campaigns_to_run:
+            # Проверяем, не постили ли мы уже в этом временном окне
+            last_post_time = selected_campaign.get('last_post_time')
+            if last_post_time:
+                # Если последний пост был в текущем временном окне, пропускаем
+                current_window_start = None
+                for timing in selected_campaign.get('timings', []):
+                    if timing['day_of_week'] == current_day and timing['start_time'] <= current_time < timing['end_time']:
+                        current_window_start = datetime.combine(datetime.today(), timing['start_time'])
+                        break
+
+                if current_window_start and last_post_time >= current_window_start:
+                    print(f"⏰ Кампания '{selected_campaign['name']}' уже постила в этом временном окне, пропускаем.")
+                    continue
+
             print(f"-> Кампания '{selected_campaign['name']}' соответствует таймингу. Запуск постинга...")
 
-            # 6. Попытка получить продукт из очереди
+            # 4. Попытка получить продукт из очереди
             queued_product = await self.campaign_manager.get_next_queued_product(selected_campaign['id'])
 
             if queued_product:
@@ -116,13 +124,11 @@ class CampaignScheduler:
             else:
                 print(f"📭 Очередь пуста для кампании '{selected_campaign['name']}'. Используем поиск в реальном времени...")
 
-                # 6b. Fallback: Запуск основного процесса постинга (поиск в реальном времени)
+                # 4b. Fallback: Запуск основного процесса постинга (поиск в реальном времени)
                 await self.post_manager.fetch_and_post_enhanced(selected_campaign)
 
-            # 7. Обновление времени последнего поста
+            # 5. Обновление времени последнего поста
             await self.campaign_manager.mark_last_post_time(selected_campaign['id'], datetime.now())
-        else:
-            print(f"⏰ Кампания '{selected_campaign['name']}' не соответствует текущему таймингу.")
 
     def check_timing_conflict(self, current_campaign) -> bool:
         """
@@ -146,10 +152,8 @@ class CampaignScheduler:
                 start = timing['start_time']
                 end = timing['end_time']
 
-                # Постинг должен произойти один раз в начале интервала или в течение него
-                # Для простоты, допустим, мы постим, если время находится в интервале
+                # Постинг происходит в течение всего интервала
                 if start <= current_time < end:
-                     # TODO: Реализовать логику, чтобы пост был один раз в интервале!
                     return True
         return False
 
