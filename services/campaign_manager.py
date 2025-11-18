@@ -192,7 +192,7 @@ class CampaignManager:
 
         return campaigns
 
-    async def get_conflicting_campaigns(self, campaign_id: int, day_of_week: int, current_time: str) -> List[str]:
+    async def get_conflicting_campaigns(self, campaign_id: int, day_of_week: int, current_time: Any) -> List[str]:
         """
         Проверяет, есть ли другая запущенная кампания (status='running', id != campaign_id),
         которая имеет активный тайминг в текущее время И имеет общий канал.
@@ -220,7 +220,7 @@ class CampaignManager:
         AND $2 < end_time;
         """
 
-        # 3. Запрос всех запущенных кампаний (кроме текущей)
+        # 4. Запрос всех запущенных кампаний (кроме текущей)
         running_campaigns_query = "SELECT id, name, params FROM campaigns WHERE status = 'running' AND id != $1;"
 
         async with self.db_pool.acquire() as conn:
@@ -230,7 +230,20 @@ class CampaignManager:
 
             conflicting_channels = set()
 
-            running_campaigns = await conn.fetch(running_campaigns_query, campaign_id)
+            running_campaigns_records = await conn.fetch(running_campaigns_query, campaign_id)
+            
+            # Parse params from JSON string to dict
+            import json
+            running_campaigns = []
+            for r in running_campaigns_records:
+                campaign = dict(r)
+                if isinstance(campaign.get('params'), str):
+                    try:
+                        campaign['params'] = json.loads(campaign['params'])
+                    except json.JSONDecodeError:
+                        campaign['params'] = {}
+                running_campaigns.append(campaign)
+
 
             for rc in running_campaigns:
                 # Parse params from JSON string to dict if needed
