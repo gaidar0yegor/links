@@ -311,12 +311,24 @@ class PostManager:
 
         # --- Content Generation with Templates ---
         try:
+            # Get campaign language for content generation
+            campaign_language = params.get('language', 'it')
+
             if content_template_id:
                 # Use specific template
-                content_result = await content_generator.generate_post_content(product_data)
+                content_result = await content_generator.generate_content(product_data, language=campaign_language)
             else:
                 # Use category-based template selection
-                content_result = await content_generator.generate_post_content(product_data)
+                content_result = await content_generator.generate_content(product_data, language=campaign_language)
+
+            # Convert to post content format if needed
+            if content_result and not isinstance(content_result, dict):
+                content_result = {
+                    'text': content_result.get('content', ''),
+                    'hashtags': content_result.get('hashtags', '#Product #Affiliate'),
+                    'product_link': product_data.get('AffiliateLink', ''),
+                    'product_image': product_data.get('ImageURL', '')
+                }
 
             if not content_result:
                 print(f"⚠️  Content generation failed, using fallback for campaign {campaign['name']}")
@@ -472,7 +484,18 @@ class PostManager:
 
         # --- Content Generation ---
         try:
-            content_result = await content_generator.generate_post_content(formatted_product_data)
+            # Get campaign language for content generation
+            campaign_language = params.get('language', 'it')
+            content_result = await content_generator.generate_content(formatted_product_data, language=campaign_language)
+
+            # Convert to post content format if needed
+            if content_result and not isinstance(content_result, dict):
+                content_result = {
+                    'text': content_result.get('content', ''),
+                    'hashtags': content_result.get('hashtags', '#Product #Affiliate'),
+                    'product_link': formatted_product_data.get('AffiliateLink', ''),
+                    'product_image': formatted_product_data.get('ImageURL', '')
+                }
 
             if not content_result:
                 print(f"⚠️  Content generation failed for queued product, using fallback")

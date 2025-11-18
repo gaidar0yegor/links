@@ -58,7 +58,7 @@ async def get_options_from_gsheets(sheet_name: str) -> List[Tuple[str, str]]:
             ("English", "en"),
             ("Italian", "it"),
             ("Spanish", "es"),
-            ("French", "fr")
+            ("Russian", "ru")
         ]
 
     return []

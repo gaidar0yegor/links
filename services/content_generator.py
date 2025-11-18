@@ -84,7 +84,7 @@ class ContentGenerator:
         """Get hashtags for the specified category."""
         return self.hashtags_cache.get(category, '#Affiliate #Product')
 
-    async def generate_content(self, product_data: Dict[str, Any], category: Optional[str] = None) -> Optional[Dict[str, str]]:
+    async def generate_content(self, product_data: Dict[str, Any], category: Optional[str] = None, language: str = 'it') -> Optional[Dict[str, str]]:
         """
         Generate content for a product using templates and AI rewriting with product data.
 
@@ -185,8 +185,11 @@ class ContentGenerator:
 
             # Use AI to generate content with hashtags based on product data
             try:
+                print(f"DEBUG: ContentGenerator - About to call _generate_content_with_product_data")
                 final_content, generated_hashtags = await self._generate_content_with_product_data(product_data, content)
+                print(f"DEBUG: ContentGenerator - LLM call returned: final_content={bool(final_content)}, hashtags='{generated_hashtags}'")
                 if final_content:
+                    print(f"DEBUG: ContentGenerator - Using AI-generated content: {final_content[:100]}...")
                     content = final_content
                     hashtags = generated_hashtags
                     # Ensure price is still in the content after AI rewriting
@@ -199,8 +202,10 @@ class ContentGenerator:
                             content = '\n'.join(lines)
                 else:
                     # Fallback if AI generation fails
+                    print(f"DEBUG: ContentGenerator - AI generation returned None, using fallback")
                     hashtags = '#Product #Affiliate'
             except Exception as e:
+                print(f"DEBUG: ContentGenerator - AI content generation exception: {e}")
                 bot_logger.log_error("ContentGenerator", e, "AI content generation failed, using fallback")
                 hashtags = '#Product #Affiliate'
 
@@ -210,6 +215,11 @@ class ContentGenerator:
                 # Add top 2-3 features as bullet points
                 feature_bullets = "\n\n" + "\n".join(f"• {feature.strip()}" for feature in features[:3])
                 content += feature_bullets
+
+            # Apply language translation if needed
+            if language == 'ru':
+                content = await self._translate_to_russian(content)
+                hashtags = await self._translate_hashtags_to_russian(hashtags)
 
             # FINAL PRICE GUARANTEE: Ensure price is always included in the final content
             print(f"DEBUG: Final guarantee start - price = '{price}', content length = {len(content)}")
@@ -312,6 +322,81 @@ Please rewrite this content to be engaging and persuasive for social media. Incl
         except Exception as e:
             bot_logger.log_error("ContentGenerator", e, "AI content generation with product data failed")
             return None, '#Product #Affiliate'
+
+    async def _translate_to_russian(self, content: str) -> str:
+        """Translate content to Russian using AI."""
+        try:
+            if not content or content.strip() == '':
+                return content
+
+            translation_prompt = f"""Translate the following Italian product description to Russian. Keep the structure and formatting intact, but translate all text to Russian. Maintain any emojis, special characters, and formatting:
+
+{content}
+
+Provide only the Russian translation, nothing else."""
+
+            translated = await self.llm_client.rewrite_text(translation_prompt, content)
+            if translated and len(translated.strip()) > 0:
+                return translated.strip()
+            else:
+                # Fallback: return original content if translation fails
+                bot_logger.log_error("ContentGenerator", Exception("Russian translation failed"), f"Returning original content: {content[:100]}...")
+                return content
+
+        except Exception as e:
+            bot_logger.log_error("ContentGenerator", e, f"Russian translation failed for content: {content[:100]}...")
+            return content
+
+    async def _translate_hashtags_to_russian(self, hashtags: str) -> str:
+        """Translate hashtags to Russian equivalents."""
+        try:
+            if not hashtags or hashtags.strip() == '':
+                return '#Продукт #Партнер'
+
+            # Common hashtag translations
+            hashtag_translations = {
+                '#Deal': '#Скидка',
+                '#Product': '#Продукт',
+                '#Affiliate': '#Партнер',
+                '#Shopping': '#Покупки',
+                '#Amazon': '#Амазон',
+                '#Sale': '#Распродажа',
+                '#Discount': '#Скидка',
+                '#Offer': '#Предложение',
+                '#Buy': '#Купить',
+                '#Shop': '#Магазин',
+                '#Price': '#Цена',
+                '#Quality': '#Качество',
+                '#Best': '#Лучший',
+                '#New': '#Новый',
+                '#Great': '#Отличный'
+            }
+
+            # Split hashtags and translate each one
+            hashtag_list = hashtags.split()
+            translated_hashtags = []
+
+            for hashtag in hashtag_list:
+                hashtag = hashtag.strip()
+                if hashtag in hashtag_translations:
+                    translated_hashtags.append(hashtag_translations[hashtag])
+                else:
+                    # For unknown hashtags, try AI translation
+                    try:
+                        translation_prompt = f"Translate this English hashtag to Russian: {hashtag}. Provide only the Russian hashtag starting with #, nothing else."
+                        translated = await self.llm_client.rewrite_text(translation_prompt, hashtag)
+                        if translated and translated.startswith('#'):
+                            translated_hashtags.append(translated.strip())
+                        else:
+                            translated_hashtags.append(hashtag)  # Keep original if translation fails
+                    except:
+                        translated_hashtags.append(hashtag)  # Keep original if translation fails
+
+            return ' '.join(translated_hashtags)
+
+        except Exception as e:
+            bot_logger.log_error("ContentGenerator", e, f"Hashtag translation failed for: {hashtags}")
+            return '#Продукт #Партнер'
 
     async def generate_post_content(self, product_data: Dict[str, Any]) -> Optional[Dict[str, str]]:
         """

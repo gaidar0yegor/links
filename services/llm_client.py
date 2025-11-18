@@ -27,6 +27,7 @@ class OpenAIClient:
         try:
             # Формируем полный промпт
             full_prompt = f"{prompt}\n\n---\n\n{text}"
+            print(f"DEBUG: LLM Client - Making API call with prompt length: {len(full_prompt)}")
 
             # Prepare the request payload
             payload = {
@@ -45,6 +46,7 @@ class OpenAIClient:
                 "Content-Type": "application/json"
             }
 
+            print(f"DEBUG: LLM Client - Sending request to {self.base_url}/chat/completions")
             response = self.session.post(
                 f"{self.base_url}/chat/completions",
                 json=payload,
@@ -52,14 +54,19 @@ class OpenAIClient:
                 timeout=30
             )
 
+            print(f"DEBUG: LLM Client - Response status: {response.status_code}")
             response.raise_for_status()
             result = response.json()
 
             # Extract the response text
             if result.get("choices") and len(result["choices"]) > 0:
-                return result["choices"][0]["message"]["content"].strip()
+                response_text = result["choices"][0]["message"]["content"].strip()
+                print(f"DEBUG: LLM Client - Got response, length: {len(response_text)}")
+                return response_text
+            print(f"DEBUG: LLM Client - No choices in response")
             return None
 
         except Exception as e:
+            print(f"DEBUG: LLM Client - Exception: {e}")
             bot_logger.log_error("OpenAIClient", e, f"Ошибка при вызове OpenAI API: {e}")
             return None
