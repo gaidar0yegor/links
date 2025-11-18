@@ -113,6 +113,7 @@ class PostManager:
         # Get campaign parameters
         params = campaign.get('params', {})
         campaign_id = campaign.get('id')
+        language = params.get('language', 'en')
 
         # Get enhanced configuration
         content_template_id = params.get('content_template_id')
@@ -311,15 +312,12 @@ class PostManager:
 
         # --- Content Generation with Templates ---
         try:
-            # Get campaign language for content generation
-            campaign_language = params.get('language', 'it')
-
             if content_template_id:
                 # Use specific template
-                content_result = await content_generator.generate_content(product_data, language=campaign_language)
+                content_result = await content_generator.generate_post_content(product_data, language=language)
             else:
                 # Use category-based template selection
-                content_result = await content_generator.generate_content(product_data, language=campaign_language)
+                content_result = await content_generator.generate_post_content(product_data, language=language)
 
             # Convert to post content format if needed
             if content_result and not isinstance(content_result, dict):
@@ -384,6 +382,12 @@ class PostManager:
         # --- Format Final Content ---
         text_content = content_result['text']
         hashtags = content_result.get('hashtags', '')
+        features = content_result.get('features', [])
+
+        # Add features as bullet points
+        if features:
+            feature_bullets = "\n\n" + "\n".join(f"• {feature.strip()}" for feature in features[:3])
+            text_content += feature_bullets
 
         # Add affiliate link to content
         if final_link:
@@ -393,6 +397,10 @@ class PostManager:
             text_content += f"\n\n{hashtags}"
 
         # --- Posting with Watermark ---
+        # Truncate content to Telegram's caption limit (1024 chars)
+        if len(text_content) > 1024:
+            text_content = text_content[:1020] + "..."
+
         image_url = content_result.get('product_image') or product_data.get('ImageURL', '')
         channels = params.get('channels', [])
         successful_posts = 0
@@ -467,6 +475,7 @@ class PostManager:
 
         campaign_id = campaign.get('id')
         params = campaign.get('params', {})
+        language = params.get('language', 'en')
 
         # Use enriched product data directly - content generator now handles multiple formats
         formatted_product_data = {
@@ -484,9 +493,7 @@ class PostManager:
 
         # --- Content Generation ---
         try:
-            # Get campaign language for content generation
-            campaign_language = params.get('language', 'it')
-            content_result = await content_generator.generate_content(formatted_product_data, language=campaign_language)
+            content_result = await content_generator.generate_post_content(formatted_product_data, language=language)
 
             # Convert to post content format if needed
             if content_result and not isinstance(content_result, dict):
@@ -551,6 +558,12 @@ class PostManager:
         # --- Format Final Content ---
         text_content = content_result['text']
         hashtags = content_result.get('hashtags', '')
+        features = content_result.get('features', [])
+
+        # Add features as bullet points
+        if features:
+            feature_bullets = "\n\n" + "\n".join(f"• {feature.strip()}" for feature in features[:3])
+            text_content += feature_bullets
 
         # Add affiliate link to content
         if final_link:
@@ -560,6 +573,10 @@ class PostManager:
             text_content += f"\n\n{hashtags}"
 
         # --- Posting with Watermark ---
+        # Truncate content to Telegram's caption limit (1024 chars)
+        if len(text_content) > 1024:
+            text_content = text_content[:1020] + "..."
+
         image_url = content_result.get('product_image') or formatted_product_data.get('ImageURL', '')
         channels = params.get('channels', [])
         successful_posts = 0

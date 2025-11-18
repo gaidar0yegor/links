@@ -987,20 +987,17 @@ class AmazonPAAPIClient:
                             amount = getattr(listing.price, 'amount', None)
                             currency = getattr(listing.price, 'currency', 'EUR')
                             if amount is not None:
-                                product_data['price'] = float(amount) / 100  # Convert from cents
+                                product_data['price'] = float(amount)
                                 product_data['currency'] = currency
                             break
 
             # Extract rating and review count (available in GetItems)
-            if hasattr(item, 'item_info') and item.item_info:
-                if hasattr(item.item_info, 'product_info') and item.item_info.product_info:
-                    if hasattr(item.item_info.product_info, 'customer_reviews') and item.item_info.product_info.customer_reviews:
-                        reviews = item.item_info.product_info.customer_reviews
-                        if hasattr(reviews, 'count') and reviews.count:
-                            product_data['review_count'] = int(reviews.count)
-                        if hasattr(reviews, 'star_rating') and reviews.star_rating:
-                            if hasattr(reviews.star_rating, 'rating') and reviews.star_rating.rating:
-                                product_data['rating'] = float(reviews.star_rating.rating)
+            if hasattr(item, 'customer_reviews') and item.customer_reviews:
+                if hasattr(item.customer_reviews, 'count') and item.customer_reviews.count:
+                    product_data['review_count'] = int(item.customer_reviews.count)
+                if hasattr(item.customer_reviews, 'star_rating') and item.customer_reviews.star_rating:
+                    if hasattr(item.customer_reviews.star_rating, 'rating') and item.customer_reviews.star_rating.rating:
+                        product_data['rating'] = float(item.customer_reviews.star_rating.rating)
 
             # Extract sales rank (available in GetItems)
             if hasattr(item, 'browse_node_info') and item.browse_node_info:

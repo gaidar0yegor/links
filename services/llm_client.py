@@ -22,18 +22,32 @@ class OpenAIClient:
 
         bot_logger.log_info("OpenAIClient", f"OpenAI client initialized with direct requests for model: {self.model}")
 
-    async def rewrite_text(self, prompt: str, text: str) -> str | None:
+    async def rewrite_text(self, prompt: str, text: str, language: str = 'en', char_limit: int = 1024) -> str | None:
         """Переписывает текст с помощью OpenAI, используя прямые HTTP запросы."""
         try:
             # Формируем полный промпт
             full_prompt = f"{prompt}\n\n---\n\n{text}"
-            print(f"DEBUG: LLM Client - Making API call with prompt length: {len(full_prompt)}")
+
+            language_map = {
+                'en': 'English',
+                'it': 'Italian',
+                'es': 'Spanish',
+                'ru': 'Russian',
+                'de': 'German'
+            }
+            language_name = language_map.get(language, 'English')
+
+            system_prompt = (
+                "You are a helpful assistant that rewrites text for social media posts. "
+                f"The response must be in {language_name}. "
+                f"The total length of your response must not exceed {char_limit} characters."
+            )
 
             # Prepare the request payload
             payload = {
                 "model": self.model,
                 "messages": [
-                    {"role": "system", "content": "You are a helpful assistant that rewrites text for social media posts."},
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": full_prompt}
                 ],
                 "max_tokens": 500,

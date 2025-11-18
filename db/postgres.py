@@ -91,6 +91,11 @@ async def setup_db(conn):
         );
     """)
 
+    # Миграция: добавляем колонки, если их нет, для обратной совместимости
+    await conn.execute("ALTER TABLE product_queue ADD COLUMN IF NOT EXISTS discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
+    await conn.execute("ALTER TABLE product_queue ADD COLUMN IF NOT EXISTS posted_at TIMESTAMP;")
+    await conn.execute("ALTER TABLE product_queue ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
+
     # Индексы для производительности
     await conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_product_queue_campaign_status

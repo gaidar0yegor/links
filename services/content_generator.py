@@ -84,7 +84,7 @@ class ContentGenerator:
         """Get hashtags for the specified category."""
         return self.hashtags_cache.get(category, '#Affiliate #Product')
 
-    async def generate_content(self, product_data: Dict[str, Any], category: Optional[str] = None, language: str = 'it') -> Optional[Dict[str, str]]:
+    async def generate_content(self, product_data: Dict[str, Any], category: Optional[str] = None, language: str = 'en') -> Optional[Dict[str, str]]:
         """
         Generate content for a product using templates and AI rewriting with product data.
 
@@ -170,6 +170,7 @@ class ContentGenerator:
                 reviews_count=reviews_count,
                 affiliate_link=affiliate_link,
                 price=price,
+                hashtags=''  # Add dummy value for backward compatibility with old templates
             )
 
             # Always add price information if available and not already in content
@@ -186,7 +187,7 @@ class ContentGenerator:
             # Use AI to generate content with hashtags based on product data
             try:
                 print(f"DEBUG: ContentGenerator - About to call _generate_content_with_product_data")
-                final_content, generated_hashtags = await self._generate_content_with_product_data(product_data, content)
+                final_content, generated_hashtags = await self._generate_content_with_product_data(product_data, content, language)
                 print(f"DEBUG: ContentGenerator - LLM call returned: final_content={bool(final_content)}, hashtags='{generated_hashtags}'")
                 if final_content:
                     print(f"DEBUG: ContentGenerator - Using AI-generated content: {final_content[:100]}...")
@@ -261,7 +262,7 @@ class ContentGenerator:
             bot_logger.log_error("ContentGenerator", e, f"Content generation failed for product: {product_data.get('title', product_data.get('Title', 'Unknown'))}")
             return None
 
-    async def _generate_content_with_product_data(self, product_data: Dict[str, Any], base_content: str) -> tuple[Optional[str], str]:
+    async def _generate_content_with_product_data(self, product_data: Dict[str, Any], base_content: str, language: str = 'en') -> tuple[Optional[str], str]:
         """Use AI to generate content and hashtags based on full product data."""
         try:
             # Get rewrite prompt from Google Sheets
@@ -292,7 +293,7 @@ Base Content: {base_content}
 Please rewrite this content to be engaging and persuasive for social media. Include relevant hashtags at the end of your response. Make sure the content highlights the product's key features, rating, and value proposition."""
 
             # Use the LLM to generate content with hashtags
-            response = await self.llm_client.rewrite_text(enhanced_prompt, base_content)
+            response = await self.llm_client.rewrite_text(enhanced_prompt, base_content, language=language, char_limit=500)
 
             if response:
                 # Try to separate content and hashtags
@@ -313,15 +314,15 @@ Please rewrite this content to be engaging and persuasive for social media. Incl
                     hashtag_lines = []
 
                 final_content = '\n'.join(content_lines).strip()
-                hashtags = ' '.join(hashtag_lines).strip() if hashtag_lines else '#Product #Affiliate'
+                hashtags = ' '.join(hashtag_lines).strip() if hashtag_lines else ''
 
                 return final_content, hashtags
             else:
-                return None, '#Product #Affiliate'
+                return None, ''
 
         except Exception as e:
             bot_logger.log_error("ContentGenerator", e, "AI content generation with product data failed")
-            return None, '#Product #Affiliate'
+            return None, ''
 
     async def _translate_to_russian(self, content: str) -> str:
         """Translate content to Russian using AI."""
@@ -398,18 +399,19 @@ Provide only the Russian translation, nothing else."""
             bot_logger.log_error("ContentGenerator", e, f"Hashtag translation failed for: {hashtags}")
             return '#Продукт #Партнер'
 
-    async def generate_post_content(self, product_data: Dict[str, Any]) -> Optional[Dict[str, str]]:
+    async def generate_post_content(self, product_data: Dict[str, Any], language: str = 'en') -> Optional[Dict[str, str]]:
         """
         Generate complete post content including text, hashtags, and metadata.
 
         Args:
             product_data: Product information from Amazon/Google Sheets
+            language: The target language for the content
 
         Returns:
             Complete post data dictionary
         """
         try:
-            content_result = await self.generate_content(product_data)
+            content_result = await self.generate_content(product_data, language=language)
 
             if not content_result:
                 # Return fallback content if generation failed - include price if available
@@ -434,25 +436,27 @@ Provide only the Russian translation, nothing else."""
 
                 return {
                     'text': f"✨ **GREAT DEAL!** {title}\n\n{price_text}Check out this amazing product!",
-                    'hashtags': '#Deal #Product #Affiliate',
+                    'hashtags': '',
                     'product_name': product_data.get('Title', product_data.get('title', '')),
                     'product_link': product_data.get('AffiliateLink', product_data.get('affiliate_link', '')),
                     'product_image': product_data.get('ImageURL', product_data.get('image_url', '')),
                     'rating': product_data.get('Rating', product_data.get('rating', '')),
                     'reviews_count': product_data.get('ReviewsCount', product_data.get('review_count', '')),
+                    'features': product_data.get('features', []),
                     'category': 'General',
                     'template_id': 'fallback'
                 }
 
-            # Add additional metadata
+            # Add additional metadata, including features
             post_data = {
                 'text': content_result['content'],
-                'hashtags': content_result.get('hashtags', '#Product #Affiliate'),
+                'hashtags': content_result.get('hashtags', ''),
                 'product_name': product_data.get('Title', product_data.get('title', '')),
                 'product_link': product_data.get('AffiliateLink', product_data.get('affiliate_link', '')),
                 'product_image': product_data.get('ImageURL', product_data.get('image_url', '')),
                 'rating': product_data.get('Rating', product_data.get('rating', '')),
                 'reviews_count': product_data.get('ReviewsCount', product_data.get('review_count', '')),
+                'features': product_data.get('features', []),
                 'category': content_result.get('category', 'General'),
                 'template_id': content_result.get('template_id', 'fallback')
             }
@@ -464,12 +468,13 @@ Provide only the Russian translation, nothing else."""
             # Ultimate fallback
             return {
                 'text': f"✨ **GREAT DEAL!** {product_data.get('Title', product_data.get('title', 'Amazing Product'))}\n\nCheck out this amazing product!",
-                'hashtags': '#Deal #Product #Affiliate',
+                'hashtags': '',
                 'product_name': product_data.get('Title', product_data.get('title', '')),
                 'product_link': product_data.get('AffiliateLink', product_data.get('affiliate_link', '')),
                 'product_image': product_data.get('ImageURL', product_data.get('image_url', '')),
                 'rating': product_data.get('Rating', product_data.get('rating', '')),
                 'reviews_count': product_data.get('ReviewsCount', product_data.get('review_count', '')),
+                'features': product_data.get('features', []),
                 'category': 'General',
                 'template_id': 'fallback'
             }
