@@ -3,6 +3,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from datetime import datetime
 from services.campaign_manager import CampaignManager, campaign_manager
 from services.post_manager import PostManager
+from services.amazon_paapi_client import AmazonPAAPIClient
 
 class CampaignScheduler:
     """Управляет планировщиком задач (APScheduler) для автопостинга."""
@@ -17,7 +18,7 @@ class CampaignScheduler:
         """Запускает планировщик и регистрирует главную задачу."""
 
         # Главная задача: запускать цикл автопостинга каждую минуту
-        # Это будет наш главный "тик" системы
+        # Это будет наш главный "тик" системы для ротации кампаний
         self.scheduler.add_job(
             self.main_posting_cycle,
             'interval',
@@ -36,6 +37,15 @@ class CampaignScheduler:
             replace_existing=True
         )
 
+        # Новая задача: автоматическое обнаружение и очередь продуктов (каждые 12 часов)
+        self.scheduler.add_job(
+            self.product_discovery_cycle,
+            'interval',
+            hours=12,
+            id='product_discovery_cycle',
+            replace_existing=True
+        )
+
         self.scheduler.start()
         print("✅ Планировщик задач запущен.")
 
@@ -50,32 +60,69 @@ class CampaignScheduler:
             print("Нет активных кампаний с заданным таймингом.")
             return
 
-        # 2. Проверка текущего времени и таймингов
-        current_time_str = datetime.now().strftime("%H:%M")
+        # 2. Ротационная система: выбираем кампанию для постинга в этом цикле
+        # Используем минуты для определения какой кампании постить
+        current_minute = datetime.now().minute
+        campaign_index = current_minute % len(active_campaigns)  # Round-robin rotation
+
+        selected_campaign = active_campaigns[campaign_index]
+
+        # 3. Проверка текущего времени и дня
         current_time = datetime.now().time()
         current_day = datetime.now().weekday() # 0 = Пн, 6 = Вс
 
-        for campaign in active_campaigns:
-            # 3. Проверка конфликтов (2.6)
-            conflicting_channels = await self.campaign_manager.get_conflicting_campaigns(
-                campaign['id'],
-                current_day,
-                current_time
-            )
+        # 4. Проверка конфликтов для выбранной кампании (disabled for testing)
+        # conflicting_channels = await self.campaign_manager.get_conflicting_campaigns(
+        #     selected_campaign['id'],
+        #     current_day,
+        #     current_time
+        # )
 
-            if conflicting_channels:
-                print(f"⚠️ КОНФЛИКТ: Кампания '{campaign['name']}' конфликтует в каналах: {conflicting_channels}. Постинг отменен.")
-                continue
+        # if conflicting_channels:
+        #     print(f"⚠️ КОНФЛИКТ: Кампания '{selected_campaign['name']}' конфликтует в каналах: {conflicting_channels}. Постинг отменен.")
+        #     return
 
-            # 4. Проверка на соответствие текущему дню и времени
-            if self.is_posting_time(campaign, current_day, current_time):
-                print(f"-> Кампания '{campaign['name']}' соответствует таймингу. Запуск постинга...")
+        # 5. Проверка на соответствие таймингу выбранной кампании
+        if self.is_posting_time(selected_campaign, current_day, current_time):
+            print(f"-> Кампания '{selected_campaign['name']}' соответствует таймингу. Запуск постинга...")
 
-                # 5. Запуск основного процесса постинга
-                await self.post_manager.fetch_and_post(campaign)
+            # 6. Попытка получить продукт из очереди
+            queued_product = await self.campaign_manager.get_next_queued_product(selected_campaign['id'])
 
-                # 6. Обновление времени последнего поста
-                await self.campaign_manager.mark_last_post_time(campaign['id'], datetime.now())
+            if queued_product:
+                print(f"📦 Используем продукт из очереди: {queued_product['asin']} - {queued_product['title'][:50]}...")
+
+                # Преобразуем данные продукта в формат, ожидаемый post_manager
+                product_data = {
+                    'asin': queued_product['asin'],
+                    'title': queued_product['title'],
+                    'price': queued_product['price'],
+                    'currency': queued_product['currency'],
+                    'rating': queued_product['rating'],
+                    'review_count': queued_product['review_count'],
+                    'sales_rank': queued_product['sales_rank'],
+                    'image_url': queued_product['image_url'],
+                    'affiliate_link': queued_product['affiliate_link']
+                }
+
+                # Запуск постинга с продуктом из очереди
+                await self.post_manager.post_queued_product(selected_campaign, product_data)
+
+                # Отмечаем продукт как опубликованный
+                await self.campaign_manager.mark_product_posted(queued_product['id'])
+
+                print(f"✅ Продукт из очереди опубликован: {queued_product['asin']}")
+
+            else:
+                print(f"📭 Очередь пуста для кампании '{selected_campaign['name']}'. Используем поиск в реальном времени...")
+
+                # 6b. Fallback: Запуск основного процесса постинга (поиск в реальном времени)
+                await self.post_manager.fetch_and_post_enhanced(selected_campaign)
+
+            # 7. Обновление времени последнего поста
+            await self.campaign_manager.mark_last_post_time(selected_campaign['id'], datetime.now())
+        else:
+            print(f"⏰ Кампания '{selected_campaign['name']}' не соответствует текущему таймингу.")
 
     def check_timing_conflict(self, current_campaign) -> bool:
         """
@@ -111,6 +158,115 @@ class CampaignScheduler:
         # Здесь будет логика: API запрос -> Рерайт -> Постинг
         print(f"Постинг для {campaign['name']} в каналы: {campaign['params']['channels']}")
         # await self.bot.send_message(CHAT_ID, f"Запущен пост для {campaign['name']}")
+
+    async def product_discovery_cycle(self):
+        """Автоматическое обнаружение и добавление продуктов в очередь."""
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔍 Запущен цикл обнаружения продуктов...")
+
+        # Инициализируем Amazon PA API клиент
+        amazon_client = AmazonPAAPIClient()
+
+        # Получаем все активные кампании
+        active_campaigns = await self.campaign_manager.get_active_campaigns_with_timings()
+
+        if not active_campaigns:
+            print("❌ Нет активных кампаний для обнаружения продуктов.")
+            return
+
+        total_queued = 0
+
+        for campaign in active_campaigns:
+            campaign_id = campaign['id']
+            campaign_name = campaign['name']
+            params = campaign.get('params', {})
+
+            # Проверяем размер очереди для этой кампании
+            queue_size = await self.campaign_manager.get_queue_size(campaign_id)
+            print(f"📊 Кампания '{campaign_name}' (ID: {campaign_id}): очередь содержит {queue_size} продуктов")
+
+            # Если очередь достаточно большая (минимум 20 продуктов), пропускаем
+            if queue_size >= 20:
+                print(f"⏭️  Кампания '{campaign_name}': очередь достаточно полная, пропускаем")
+                continue
+
+            # Определяем параметры поиска
+            browse_node_ids = params.get('browse_node_ids', [])
+            min_rating = params.get('min_rating', 0.0)
+            min_price = params.get('min_price')
+            min_saving_percent = params.get('min_saving_percent')
+            fulfilled_by_amazon = params.get('fulfilled_by_amazon')
+            # Get campaign-specific sales rank threshold (simplified quality control)
+            max_sales_rank = params.get('max_sales_rank', 10000)
+
+            if not browse_node_ids:
+                print(f"⚠️  Кампания '{campaign_name}': нет browse_node_ids, пропускаем")
+                continue
+
+            print(f"🔎 Поиск продуктов для кампании '{campaign_name}' в категориях: {browse_node_ids} (max rank: {max_sales_rank})")
+
+            try:
+                # Выполняем поиск продуктов
+                search_results = await amazon_client.search_items_enhanced(
+                    browse_node_ids=browse_node_ids,
+                    min_rating=min_rating,
+                    min_price=min_price,
+                    min_saving_percent=min_saving_percent,
+                    fulfilled_by_amazon=fulfilled_by_amazon,
+                    max_results=10  # Ищем до 10 кандидатов
+                )
+
+                if not search_results:
+                    print(f"❌ Кампания '{campaign_name}': продукты не найдены")
+                    continue
+
+                queued_for_campaign = 0
+
+                # Обрабатываем каждый найденный продукт
+                for product in search_results:
+                    # Применяем фильтр по sales rank (единственный критерий качества)
+                    sales_rank = product.get('sales_rank')
+                    if sales_rank is None or sales_rank > max_sales_rank:
+                        continue  # Пропускаем продукты с низким рейтингом продаж
+
+                    # Подготавливаем данные для очереди
+                    product_data = {
+                        'asin': product['asin'],
+                        'title': product.get('title'),
+                        'price': product.get('price'),
+                        'currency': product.get('currency', 'USD'),
+                        'rating': product.get('rating'),
+                        'review_count': product.get('review_count'),
+                        'sales_rank': sales_rank,
+                        'image_url': product.get('image_url'),
+                        'affiliate_link': product.get('affiliate_link'),
+                        'browse_node_ids': browse_node_ids
+                    }
+
+                    # Добавляем продукт в очередь
+                    try:
+                        product_id = await self.campaign_manager.add_product_to_queue(campaign_id, product_data)
+                        queued_for_campaign += 1
+                        total_queued += 1
+                        print(f"✅ Добавлен продукт {product['asin']} (rank: {sales_rank}) в очередь кампании '{campaign_name}'")
+                    except Exception as e:
+                        print(f"❌ Ошибка добавления продукта {product['asin']}: {e}")
+                        continue
+
+                print(f"📈 Кампания '{campaign_name}': добавлено {queued_for_campaign} продуктов в очередь")
+
+            except Exception as e:
+                print(f"❌ Ошибка поиска для кампании '{campaign_name}': {e}")
+                continue
+
+        # Очистка старых продуктов (старше 30 дней)
+        try:
+            cleaned_count = await self.campaign_manager.cleanup_old_products(days=30)
+            if cleaned_count > 0:
+                print(f"🧹 Очищено {cleaned_count} старых продуктов из очереди")
+        except Exception as e:
+            print(f"❌ Ошибка очистки: {e}")
+
+        print(f"🎉 Цикл обнаружения завершен. Всего добавлено в очередь: {total_queued} продуктов")
 
     async def refresh_gsheets_data(self):
         """Обновляет кэш данных из Google Sheets (например, whitelist, категории)."""

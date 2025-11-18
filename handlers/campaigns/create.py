@@ -367,7 +367,7 @@ async def input_min_saving_percent(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("fba:"), CampaignStates.campaign_new_select_fba)
 async def select_fba(callback: CallbackQuery, state: FSMContext):
-    """Обрабатывает выбор FBA и переходит к Шагу 8: Язык."""
+    """Обрабатывает выбор FBA и переходит к Шагу 8: Sales Rank Threshold."""
     choice = callback.data.split(":")[1]
     fba_status = {
         'yes': True,
@@ -380,19 +380,54 @@ async def select_fba(callback: CallbackQuery, state: FSMContext):
     new_campaign['fulfilled_by_amazon'] = fba_status
     await state.update_data(new_campaign=new_campaign)
 
-    await state.set_state(CampaignStates.campaign_new_select_language)
+    await state.set_state(CampaignStates.campaign_new_input_max_sales_rank)
 
-    language_options = await get_options_from_gsheets("languages")
     await callback.message.edit_text(
-        "**ШАГ 8: Выбор языка объявлений**\n\nВыберите язык:",
-        reply_markup=get_multiselect_keyboard(
-            options=language_options,
-            selected_values=[],
-            done_callback="campaign_done_language",
-            back_callback="campaign_done_rating" # Allows going back to rating
-        )
+        "**ШАГ 8: Максимальный Sales Rank**\n\n"
+        "🎯 **Упрощенная система качества**\n\n"
+        "Введите максимальный Sales Rank для товаров (рекомендуется: 10000).\n"
+        "Чем меньше число, тем лучше продаются товары.\n\n"
+        "Примеры:\n"
+        "• `10000` - товары из топ-10000 продаж\n"
+        "• `5000` - более качественные товары\n"
+        "• `50000` - более широкий выбор\n\n"
+        "Отправьте число или `0` для значения по умолчанию (10000):"
     )
     await callback.answer()
+
+
+@router.message(CampaignStates.campaign_new_input_max_sales_rank, F.text)
+async def input_max_sales_rank(message: Message, state: FSMContext):
+    """Обрабатывает ввод максимального Sales Rank и переходит к Шагу 9: Язык."""
+    try:
+        max_rank = int(message.text.strip())
+        if max_rank < 0:
+            raise ValueError("Sales rank cannot be negative")
+
+        # Use default if 0 is entered
+        if max_rank == 0:
+            max_rank = 10000
+
+        data = await state.get_data()
+        new_campaign = data['new_campaign']
+        new_campaign['max_sales_rank'] = max_rank
+        await state.update_data(new_campaign=new_campaign)
+
+        await state.set_state(CampaignStates.campaign_new_select_language)
+
+        language_options = await get_options_from_gsheets("languages")
+        await message.answer(
+            "**ШАГ 9: Выбор языка объявлений**\n\nВыберите язык:",
+            reply_markup=get_multiselect_keyboard(
+                options=language_options,
+                selected_values=[],
+                done_callback="campaign_done_language",
+                back_callback="campaign_done_rating"  # Allows going back to rating
+            )
+        )
+
+    except ValueError:
+        await message.answer("❌ Введите корректное число (например, `10000` или `0` для значения по умолчанию).")
 
 
 @router.callback_query(F.data == "campaign_done_language", CampaignStates.campaign_new_select_language)

@@ -78,6 +78,8 @@ class CampaignManager:
             'min_price': campaign_data.get('min_price'),
             'min_saving_percent': campaign_data.get('min_saving_percent'),
             'fulfilled_by_amazon': campaign_data.get('fulfilled_by_amazon'),
+            # Simplified quality control: only sales rank threshold
+            'max_sales_rank': campaign_data.get('max_sales_rank', 10000),  # Default 10,000
         }
 
         import json
@@ -143,8 +145,8 @@ class CampaignManager:
     async def get_active_campaigns_with_timings(self) -> List[Dict[str, Any]]:
         """Получает активные кампании (status='running') вместе с их таймингами."""
 
-        # 1. Запрос активных кампаний
-        campaigns_query = "SELECT id, name, params FROM campaigns WHERE status = 'running';"
+        # 1. Запрос активных кампаний (сортировка по ID для консистентности)
+        campaigns_query = "SELECT id, name, params FROM campaigns WHERE status = 'running' ORDER BY id;"
         async with self.db_pool.acquire() as conn:
             campaign_records = await conn.fetch(campaigns_query)
 
@@ -286,6 +288,22 @@ class CampaignManager:
                 data.get('asin'),
                 data['final_link']
             )
+
+    async def get_posted_asins(self, campaign_id: int, limit: int = 1000) -> List[str]:
+        """
+        Get list of ASINs already posted by this campaign to prevent duplicates.
+        Returns the most recent posted ASINs (up to limit).
+        """
+        query = """
+        SELECT DISTINCT asin
+        FROM statistics_log
+        WHERE campaign_id = $1 AND asin IS NOT NULL AND asin != ''
+        ORDER BY post_time DESC
+        LIMIT $2;
+        """
+        async with self.db_pool.acquire() as conn:
+            records = await conn.fetch(query, campaign_id, limit)
+            return [record['asin'] for record in records]
 
     async def delete_campaign(self, campaign_id: int):
         """Удаляет кампанию и все связанные с ней тайминги (CASCADE DELETE)."""
@@ -504,6 +522,96 @@ class CampaignManager:
             recommendations.append("Limited posting schedule. Consider expanding to more time slots.")
 
         return recommendations if recommendations else ["Campaign is performing well. Continue current strategy."]
+
+    # ===== PRODUCT QUEUE MANAGEMENT =====
+
+    async def add_product_to_queue(self, campaign_id: int, product_data: Dict[str, Any]) -> int:
+        """
+        Add a vetted product to the product queue.
+        """
+        query = """
+        INSERT INTO product_queue (
+            campaign_id, asin, title, price, currency, rating, review_count,
+            sales_rank, image_url, affiliate_link, browse_node_ids, quality_score
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        RETURNING id;
+        """
+
+        async with self.db_pool.acquire() as conn:
+            product_id = await conn.fetchval(
+                query,
+                campaign_id,
+                product_data['asin'],
+                product_data.get('title'),
+                product_data.get('price'),
+                product_data.get('currency'),
+                product_data.get('rating'),
+                product_data.get('review_count'),
+                product_data.get('sales_rank'),
+                product_data.get('image_url'),
+                product_data.get('affiliate_link'),
+                product_data.get('browse_node_ids', []),
+                product_data.get('sales_rank')  # Quality score = sales rank
+            )
+            return product_id
+
+    async def get_next_queued_product(self, campaign_id: int) -> Dict[str, Any] | None:
+        """
+        Get the next product from the queue for a specific campaign.
+        Returns the oldest queued product.
+        """
+        query = """
+        SELECT * FROM product_queue
+        WHERE campaign_id = $1 AND status = 'queued'
+        ORDER BY discovered_at ASC
+        LIMIT 1;
+        """
+
+        async with self.db_pool.acquire() as conn:
+            record = await conn.fetchrow(query, campaign_id)
+            if record:
+                # Convert to dict and parse browse_node_ids
+                product = dict(record)
+                # browse_node_ids is already an array in PostgreSQL
+                return product
+            return None
+
+    async def mark_product_posted(self, product_id: int):
+        """
+        Mark a product as posted and update the timestamp.
+        """
+        query = """
+        UPDATE product_queue
+        SET status = 'posted', posted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+        WHERE id = $1;
+        """
+
+        async with self.db_pool.acquire() as conn:
+            await conn.execute(query, product_id)
+
+    async def get_queue_size(self, campaign_id: int) -> int:
+        """
+        Get the number of queued products for a campaign.
+        """
+        query = "SELECT COUNT(*) FROM product_queue WHERE campaign_id = $1 AND status = 'queued';"
+
+        async with self.db_pool.acquire() as conn:
+            count = await conn.fetchval(query, campaign_id)
+            return count or 0
+
+    async def cleanup_old_products(self, days: int = 30):
+        """
+        Remove products that have been in the queue for too long without being posted.
+        """
+        query = """
+        DELETE FROM product_queue
+        WHERE status = 'queued' AND discovered_at < CURRENT_TIMESTAMP - INTERVAL '%s days';
+        """ % days
+
+        async with self.db_pool.acquire() as conn:
+            deleted_count = await conn.fetchval("SELECT COUNT(*) FROM product_queue WHERE status = 'queued' AND discovered_at < CURRENT_TIMESTAMP - INTERVAL '%s days';" % days)
+            await conn.execute(query)
+            return deleted_count or 0
 
 # Глобальная переменная для CampaignManager будет инициализирована в main.py
 campaign_manager: CampaignManager | None = None

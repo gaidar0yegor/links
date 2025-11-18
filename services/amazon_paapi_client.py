@@ -72,20 +72,22 @@ class AmazonPAAPIClient:
                 bot_logger.log_error("AmazonPAAPIClient", e, "Failed to initialize PAAPI client")
                 self.api_client = None
 
-    async def search_items(self, keywords: str, min_rating: float = 0.0, filters: Optional[Dict[str, Any]] = None, browse_node_ids: Optional[List[str]] = None) -> Optional[Dict[str, Any]]:
+    async def search_items(self, keywords: str, min_rating: float = 0.0, filters: Optional[Dict[str, Any]] = None, browse_node_ids: Optional[List[str]] = None, exclude_asins: Optional[List[str]] = None) -> Optional[Dict[str, Any]]:
         """
         Advanced search for products using Amazon PA API 5.0 with sophisticated filtering.
+        Now includes deduplication by excluding already posted ASINs.
 
         Args:
             keywords: Search keywords
             min_rating: Minimum rating filter
             filters: Advanced filters dictionary
             browse_node_ids: List of browse node IDs to search within
+            exclude_asins: List of ASINs to exclude from results
 
         Returns:
             Product data dictionary or None if error
         """
-        print(f"DEBUG: search_items called with keywords={keywords}, min_rating={min_rating}, browse_node_ids={browse_node_ids}")
+        print(f"DEBUG: search_items called with keywords={keywords}, min_rating={min_rating}, browse_node_ids={browse_node_ids}, exclude_asins={len(exclude_asins) if exclude_asins else 0}")
 
         # If Amazon API is disabled or SDK not available, use fallback
         if not self.use_amazon_api or not PAAPI_AVAILABLE or not self.api_client:
@@ -113,18 +115,18 @@ class AmazonPAAPIClient:
                     del final_filters[key]
 
         try:
-            if PAAPI_AVAILABLE == "python_python_amazon_paapi":
+            if PAAPI_AVAILABLE == "paapi5_python_sdk":
                 # Use paapi5_python_sdk with advanced search
-                return await self._advanced_search_api(keywords, final_filters)
+                return await self._advanced_search_api(keywords, final_filters, exclude_asins)
             elif PAAPI_AVAILABLE == "python_amazon_paapi":
                 # Use python-amazon-paapi with browse node search if available
                 print(f"DEBUG: search_items - browse_node_ids={browse_node_ids}, type={type(browse_node_ids)}")
                 if browse_node_ids:
                     print(f"DEBUG: Calling browse_node_search_api with browse_node_ids={browse_node_ids}")
-                    return self._browse_node_search_api(browse_node_ids, keywords, min_rating, final_filters)
+                    return self._browse_node_search_api(browse_node_ids, keywords, min_rating, final_filters, exclude_asins)
                 else:
                     print(f"DEBUG: Calling basic_search_api")
-                    return self._basic_search_api(keywords, min_rating)
+                    return self._basic_search_api(keywords, min_rating, exclude_asins)
 
         except Exception as e:
             bot_logger.log_error("AmazonPAAPIClient", e, f"Unexpected error for keywords: {keywords}")
@@ -324,17 +326,18 @@ class AmazonPAAPIClient:
             "Description": description
         }
 
-    def _browse_node_search_api(self, browse_node_ids: List[str], keywords: str, min_rating: float, filters: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Search within specific browse nodes using Amazon PA API."""
+    def _browse_node_search_api(self, browse_node_ids: List[str], keywords: str, min_rating: float, filters: Dict[str, Any], exclude_asins: Optional[List[str]] = None) -> Optional[Dict[str, Any]]:
+        """Search within specific browse nodes using Amazon PA API with deduplication."""
         try:
             # Convert min_rating to integer for Amazon API
             min_rating_int = int(float(min_rating)) if min_rating else 3
             min_rating_int = max(1, min(min_rating_int, 5))  # Ensure within 1-5 range
-            print(f"DEBUG: browse_node_search_api - min_rating={min_rating}, min_rating_int={min_rating_int}")
+            print(f"DEBUG: browse_node_search_api - min_rating={min_rating}, min_rating_int={min_rating_int}, exclude_asins={len(exclude_asins) if exclude_asins else 0}")
 
             # Try each browse node until we find products
             for node_id in browse_node_ids:
                 try:
+                    # Increase item_count to get more variety and filter out excluded ASINs
                     search_items_request = SearchItemsRequest(
                         partner_tag=self.associate_tag,
                         partner_type=PartnerType.ASSOCIATES,
@@ -342,7 +345,7 @@ class AmazonPAAPIClient:
                         browse_node_id=node_id,
                         keywords=keywords if keywords else None,
                         search_index="All",
-                        item_count=5,
+                        item_count=10,  # Get more results for variety
                         min_reviews_rating=min_rating_int,
                         resources=[
                             SearchItemsResource.ITEMINFO_TITLE,
@@ -362,11 +365,18 @@ class AmazonPAAPIClient:
                     response = self.api_client.search_items(search_items_request)
 
                     if response.search_result and response.search_result.items:
-                        item = response.search_result.items[0]
-                        product_data = self._extract_product_data(item)
-                        bot_logger.log_info("AmazonPAAPIClient",
-                                          f"Found product in browse node {node_id}: {product_data.get('Title', 'Unknown')}")
-                        return product_data
+                        # Filter out excluded ASINs and find the first valid product
+                        for item in response.search_result.items:
+                            item_asin = getattr(item, 'asin', '')
+                            if exclude_asins and item_asin in exclude_asins:
+                                print(f"DEBUG: Skipping already posted ASIN: {item_asin}")
+                                continue
+
+                            product_data = self._extract_product_data(item)
+                            if product_data and product_data.get('ASIN'):
+                                bot_logger.log_info("AmazonPAAPIClient",
+                                                  f"Found new product in browse node {node_id}: {product_data.get('Title', 'Unknown')} (ASIN: {product_data.get('ASIN')})")
+                                return product_data
 
                     # Rate limiting between node searches
                     import asyncio
@@ -384,7 +394,7 @@ class AmazonPAAPIClient:
 
             # No products found in any browse node
             bot_logger.log_info("AmazonPAAPIClient",
-                              f"No products found in browse nodes {browse_node_ids} for keywords: {keywords}")
+                              f"No new products found in browse nodes {browse_node_ids} for keywords: {keywords} (excluded {len(exclude_asins) if exclude_asins else 0} ASINs)")
             return None
 
         except Exception as e:
@@ -716,6 +726,182 @@ class AmazonPAAPIClient:
                 f"Error reading products from Google Sheets, using fallback for keywords: {keywords}"
             )
             return self._get_fallback_mock_data(keywords, min_rating)
+
+    async def search_items_enhanced(self, browse_node_ids: List[str], min_rating: float = 0.0,
+                                   min_price: Optional[float] = None, min_saving_percent: Optional[int] = None,
+                                   fulfilled_by_amazon: Optional[bool] = None, max_results: int = 10) -> List[Dict[str, Any]]:
+        """
+        Enhanced search that returns multiple products with sales rank information.
+        Used by the product discovery cycle to populate the product queue.
+
+        Args:
+            browse_node_ids: List of Amazon browse node IDs to search within
+            min_rating: Minimum customer rating (0.0-5.0)
+            min_price: Minimum price filter
+            min_saving_percent: Minimum saving percentage
+            fulfilled_by_amazon: Whether to filter for FBA products
+            max_results: Maximum number of products to return
+
+        Returns:
+            List of product dictionaries with enhanced data
+        """
+        print(f"DEBUG: search_items_enhanced called with browse_node_ids={browse_node_ids}, max_results={max_results}")
+
+        # If Amazon API is disabled or SDK not available, return empty list
+        if not self.use_amazon_api or not PAAPI_AVAILABLE or not self.api_client:
+            print("DEBUG: Amazon API not available, returning empty list")
+            return []
+
+        try:
+            all_products = []
+
+            # Search in each browse node
+            for node_id in browse_node_ids:
+                try:
+                    # Create search request
+                    search_request = SearchItemsRequest(
+                        partner_tag=self.associate_tag,
+                        partner_type=PartnerType.ASSOCIATES,
+                        marketplace="www.amazon.it",
+                        browse_node_id=node_id,
+                        search_index="All",
+                        item_count=min(max_results, 10),  # Amazon limits to 10 per request
+                        sort_by="Featured",
+                        resources=[
+                            SearchItemsResource.ITEMINFO_TITLE,
+                            SearchItemsResource.OFFERS_LISTINGS_PRICE,
+                            SearchItemsResource.IMAGES_PRIMARY_LARGE,
+                            SearchItemsResource.CUSTOMERREVIEWS_COUNT,
+                            SearchItemsResource.CUSTOMERREVIEWS_STARRATING,
+                            SearchItemsResource.BROWSENODEINFO_WEBSITESALESRANK,
+                            SearchItemsResource.OFFERS_LISTINGS_SAVINGBASIS,
+                        ],
+                    )
+
+                    # Apply filters
+                    if min_rating and min_rating > 0:
+                        min_rating_int = max(1, min(int(min_rating), 5))
+                        search_request.min_reviews_rating = min_rating_int
+
+                    if min_price:
+                        search_request.min_price = int(min_price * 100)  # Convert to cents
+
+                    if min_saving_percent:
+                        search_request.min_saving_percent = min_saving_percent
+
+                    # Execute search
+                    response = self.api_client.search_items(search_request)
+
+                    if response and hasattr(response, 'search_result') and response.search_result:
+                        items = getattr(response.search_result, 'items', [])
+                        print(f"DEBUG: Found {len(items)} items in browse node {node_id}")
+
+                        for item in items:
+                            product_data = self._extract_enhanced_product_data(item)
+                            if product_data:
+                                all_products.append(product_data)
+
+                    # Rate limiting between requests
+                    import time
+                    time.sleep(0.2)
+
+                except ApiException as e:
+                    print(f"DEBUG: API Exception for browse node {node_id}: {e.reason}")
+                    continue
+                except Exception as e:
+                    print(f"DEBUG: Exception for browse node {node_id}: {e}")
+                    continue
+
+            # Remove duplicates by ASIN and limit results
+            unique_products = []
+            seen_asins = set()
+
+            for product in all_products:
+                asin = product.get('asin')
+                if asin and asin not in seen_asins:
+                    unique_products.append(product)
+                    seen_asins.add(asin)
+                    if len(unique_products) >= max_results:
+                        break
+
+            print(f"DEBUG: Returning {len(unique_products)} unique products")
+            return unique_products
+
+        except Exception as e:
+            print(f"DEBUG: search_items_enhanced failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
+
+    def _extract_enhanced_product_data(self, item) -> Optional[Dict[str, Any]]:
+        """
+        Extract enhanced product data including sales rank for the discovery cycle.
+        """
+        try:
+            asin = getattr(item, 'asin', '')
+            if not asin:
+                return None
+
+            product_data = {
+                'asin': asin,
+                'title': '',
+                'price': None,
+                'currency': 'EUR',
+                'rating': None,
+                'review_count': None,
+                'sales_rank': None,
+                'image_url': '',
+                'affiliate_link': getattr(item, 'detail_page_url', ''),
+            }
+
+            # Extract title
+            if hasattr(item, 'item_info') and item.item_info:
+                if hasattr(item.item_info, 'title') and item.item_info.title:
+                    product_data['title'] = getattr(item.item_info.title, 'display_value', '')
+
+            # Extract price
+            if hasattr(item, 'offers') and item.offers:
+                if hasattr(item.offers, 'listings') and item.offers.listings:
+                    for listing in item.offers.listings:
+                        if hasattr(listing, 'price') and listing.price:
+                            amount = getattr(listing.price, 'amount', None)
+                            currency = getattr(listing.price, 'currency', 'EUR')
+                            if amount is not None:
+                                product_data['price'] = float(amount) / 100  # Convert from cents
+                                product_data['currency'] = currency
+                            break
+
+            # Extract rating and review count
+            if hasattr(item, 'item_info') and item.item_info:
+                if hasattr(item.item_info, 'product_info') and item.item_info.product_info:
+                    if hasattr(item.item_info.product_info, 'customer_reviews') and item.item_info.product_info.customer_reviews:
+                        reviews = item.item_info.product_info.customer_reviews
+                        if hasattr(reviews, 'count') and reviews.count:
+                            product_data['review_count'] = reviews.count
+                        if hasattr(reviews, 'star_rating') and reviews.star_rating:
+                            if hasattr(reviews.star_rating, 'rating') and reviews.star_rating.rating:
+                                product_data['rating'] = float(reviews.star_rating.rating)
+
+            # Extract sales rank
+            if hasattr(item, 'browse_node_info') and item.browse_node_info:
+                if hasattr(item.browse_node_info, 'website_sales_rank') and item.browse_node_info.website_sales_rank:
+                    sales_rank_data = item.browse_node_info.website_sales_rank
+                    if isinstance(sales_rank_data, dict):
+                        product_data['sales_rank'] = sales_rank_data.get('sales_rank')
+                    elif hasattr(sales_rank_data, 'sales_rank'):
+                        product_data['sales_rank'] = sales_rank_data.sales_rank
+
+            # Extract image
+            if hasattr(item, 'images') and item.images:
+                if hasattr(item.images, 'primary') and item.images.primary:
+                    if hasattr(item.images.primary, 'large') and item.images.primary.large:
+                        product_data['image_url'] = getattr(item.images.primary.large, 'url', '')
+
+            return product_data
+
+        except Exception as e:
+            print(f"DEBUG: Failed to extract product data: {e}")
+            return None
 
     def _get_fallback_mock_data(self, keywords: str, min_rating: float = 0.0) -> Optional[Dict[str, Any]]:
         """

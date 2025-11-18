@@ -68,6 +68,40 @@ async def setup_db(conn):
         );
     """)
 
+    # Таблица для очереди продуктов (упрощенная система качества)
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS product_queue (
+            id SERIAL PRIMARY KEY,
+            campaign_id INTEGER REFERENCES campaigns(id) ON DELETE CASCADE,
+            asin TEXT NOT NULL,
+            title TEXT,
+            price DECIMAL(10,2),
+            currency VARCHAR(3) DEFAULT 'USD',
+            rating DECIMAL(3,2),
+            review_count INTEGER,
+            sales_rank INTEGER,
+            image_url TEXT,
+            affiliate_link TEXT,
+            browse_node_ids INTEGER[] DEFAULT '{}',
+            quality_score INTEGER, -- Sales rank as quality score (lower = better)
+            status VARCHAR(20) DEFAULT 'queued', -- 'queued', 'posted', 'rejected'
+            discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            posted_at TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+
+    # Индексы для производительности
+    await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_product_queue_campaign_status
+        ON product_queue(campaign_id, status);
+    """)
+
+    await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_product_queue_discovered
+        ON product_queue(discovered_at);
+    """)
+
     print("✅ Базовые таблицы PostgreSQL созданы или уже существуют.")
 
 # connect_to_db и setup_db можно удалить или изменить для использования пула

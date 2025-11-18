@@ -28,6 +28,7 @@ class CampaignStates(StatesGroup):
     campaign_new_input_min_price = State()
     campaign_new_input_min_saving_percent = State()
     campaign_new_select_fba = State()
+    campaign_new_input_max_sales_rank = State()
 
     # State for delete confirmation
     delete_confirmation = State()
