@@ -214,9 +214,15 @@ async def show_subcategories_for_category(callback: CallbackQuery, state: FSMCon
         await show_subcategories_for_category(callback, state)
         return
 
-    # Convert to options format
-    options = [(sub['name'], sub['name']) for sub in subcategories]
+    # Convert to options format with indices to avoid callback data length issues
+    options = [(sub['name'], str(idx)) for idx, sub in enumerate(subcategories)]
+    selected_indices = []
+
+    # Convert selected subcategory names to indices
     selected_subs = subcategories_data.get(current_category, [])
+    for idx, sub in enumerate(subcategories):
+        if sub['name'] in selected_subs:
+            selected_indices.append(str(idx))
 
     progress_text = f"**Категория {current_index + 1}/{len(selected_categories)}: {current_category}**\n\n"
     progress_text += "Выберите подкатегории (или 'Выбрать все' для всей категории):"
@@ -227,7 +233,7 @@ async def show_subcategories_for_category(callback: CallbackQuery, state: FSMCon
         f"**🎯 ШАГ 3: Подкатегории** (Мультивыбор)\n\n{progress_text}",
         reply_markup=get_multiselect_keyboard(
             options=options,
-            selected_values=selected_subs,
+            selected_values=selected_indices,
             done_callback=f"campaign_done_subcategories:{current_index}",
             back_callback="campaign_done_channels"
         )
@@ -540,26 +546,38 @@ async def toggle_selection(callback: CallbackQuery, state: FSMContext):
         key = 'categories'
         options_sheet = 'categories'
     elif current_state == CampaignStates.campaign_new_select_subcategory:
-        # Handle subcategories selection for current category
+        # Handle subcategories selection for current category using indices
         current_index = data['new_campaign'].get('current_category_index', 0)
         selected_categories = data['new_campaign']['categories']
         if current_index < len(selected_categories):
             current_category = selected_categories[current_index]
+            subcategories = sheets_api.get_subcategories_for_category(current_category)
             subcategories_data = data['new_campaign'].get('subcategories', {})
             selected_list = subcategories_data.get(current_category, [])
 
-            if value_to_toggle in selected_list:
-                selected_list.remove(value_to_toggle)
-            else:
-                selected_list.append(value_to_toggle)
+            # Convert index to subcategory name
+            try:
+                idx = int(value_to_toggle)
+                if 0 <= idx < len(subcategories):
+                    subcategory_name = subcategories[idx]['name']
+                    if subcategory_name in selected_list:
+                        selected_list.remove(subcategory_name)
+                    else:
+                        selected_list.append(subcategory_name)
+                else:
+                    await callback.answer("Invalid selection.", show_alert=True)
+                    return
+            except (ValueError, IndexError):
+                await callback.answer("Invalid selection.", show_alert=True)
+                return
 
             subcategories_data[current_category] = selected_list
             new_campaign['subcategories'] = subcategories_data
             await state.update_data(new_campaign=new_campaign)
 
-            # Redraw keyboard for current category
-            subcategories = sheets_api.get_subcategories_for_category(current_category)
-            options = [(sub['name'], sub['name']) for sub in subcategories]
+            # Redraw keyboard for current category with indices
+            options = [(sub['name'], str(idx)) for idx, sub in enumerate(subcategories)]
+            selected_indices = [str(idx) for idx, sub in enumerate(subcategories) if sub['name'] in selected_list]
 
             progress_text = f"**Категория {current_index + 1}/{len(selected_categories)}: {current_category}**\n\n"
             progress_text += "Выберите подкатегории (или 'Выбрать все' для всей категории):"
@@ -567,7 +585,7 @@ async def toggle_selection(callback: CallbackQuery, state: FSMContext):
             await callback.message.edit_reply_markup(
                 reply_markup=get_multiselect_keyboard(
                     options=options,
-                    selected_values=selected_list,
+                    selected_values=selected_indices,
                     done_callback=f"campaign_done_subcategories:{current_index}",
                     back_callback="campaign_done_channels"
                 )
@@ -670,15 +688,16 @@ async def toggle_select_all(callback: CallbackQuery, state: FSMContext):
             new_campaign['subcategories'] = subcategories_data
             await state.update_data(new_campaign=new_campaign)
 
-            # Redraw keyboard
-            options = [(sub['name'], sub['name']) for sub in subcategories]
+            # Redraw keyboard with indices
+            options = [(sub['name'], str(idx)) for idx, sub in enumerate(subcategories)]
+            selected_indices = [str(idx) for idx, sub in enumerate(subcategories) if sub['name'] in subcategories_data[current_category]]
             progress_text = f"**Категория {current_index + 1}/{len(selected_categories)}: {current_category}**\n\n"
             progress_text += "Выберите подкатегории (или 'Выбрать все' для всей категории):"
 
             await callback.message.edit_reply_markup(
                 reply_markup=get_multiselect_keyboard(
                     options=options,
-                    selected_values=subcategories_data[current_category],
+                    selected_values=selected_indices,
                     done_callback=f"campaign_done_subcategories:{current_index}",
                     back_callback="campaign_done_channels"
                 )

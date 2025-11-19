@@ -291,15 +291,26 @@ class CampaignManager:
 
     async def get_posted_asins(self, campaign_id: int, limit: int = 1000) -> List[str]:
         """
-        Get list of ASINs already posted by this campaign to prevent duplicates.
-        Returns the most recent posted ASINs (up to limit).
+        Get list of ASINs already posted or queued by this campaign to prevent duplicates.
+        Returns the most recent posted/queued ASINs (up to limit).
         """
         query = """
         SELECT asin
-        FROM statistics_log
-        WHERE campaign_id = $1 AND asin IS NOT NULL AND asin != ''
+        FROM (
+            SELECT asin FROM statistics_log
+            WHERE campaign_id = $1 AND asin IS NOT NULL AND asin != ''
+            UNION
+            SELECT asin FROM product_queue
+            WHERE campaign_id = $1 AND asin IS NOT NULL AND asin != ''
+        ) AS all_asins
         GROUP BY asin
-        ORDER BY MAX(post_time) DESC
+        ORDER BY MAX(
+            COALESCE(
+                (SELECT MAX(post_time) FROM statistics_log WHERE campaign_id = $1 AND asin = all_asins.asin),
+                (SELECT MAX(discovered_at) FROM product_queue WHERE campaign_id = $1 AND asin = all_asins.asin),
+                '1970-01-01'::timestamp
+            )
+        ) DESC
         LIMIT $2;
         """
         async with self.db_pool.acquire() as conn:

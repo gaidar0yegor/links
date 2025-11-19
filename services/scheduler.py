@@ -37,11 +37,11 @@ class CampaignScheduler:
             replace_existing=True
         )
 
-        # Новая задача: автоматическое обнаружение и очередь продуктов (каждые 12 часов)
+        # Новая задача: автоматическое обнаружение и очередь продуктов (каждые 6 часов)
         self.scheduler.add_job(
             self.product_discovery_cycle,
             'interval',
-            hours=12,
+            hours=6,  # Changed from 12 to 6
             id='product_discovery_cycle',
             replace_existing=True
         )
@@ -209,6 +209,9 @@ class CampaignScheduler:
             print(f"🔎 Поиск продуктов для кампании '{campaign_name}' в категориях: {browse_node_ids} (max rank: {max_sales_rank})")
 
             try:
+                # Get already queued/posted ASINs to avoid duplicates
+                posted_asins = await self.campaign_manager.get_posted_asins(campaign_id, limit=5000)
+
                 # Выполняем поиск продуктов
                 search_results = await amazon_client.search_items_enhanced(
                     browse_node_ids=browse_node_ids,
@@ -216,7 +219,7 @@ class CampaignScheduler:
                     min_price=min_price,
                     min_saving_percent=min_saving_percent,
                     fulfilled_by_amazon=fulfilled_by_amazon,
-                    max_results=10  # Ищем до 10 кандидатов
+                    max_results=50  # Increased from 10 to 50 to find more new products
                 )
 
                 if not search_results:
@@ -227,6 +230,9 @@ class CampaignScheduler:
 
                 # Обрабатываем каждый найденный продукт
                 for product in search_results:
+                    # Skip if already posted or queued
+                    if product.get('asin') in posted_asins:
+                        continue
                     # Применяем фильтр по sales rank (единственный критерий качества)
                     sales_rank = product.get('sales_rank')
                     if sales_rank is None or sales_rank > max_sales_rank:

@@ -286,17 +286,15 @@ class PostManager:
 
                 if not product_data:
                     print(f"WARNING: Could not find a new product for campaign {campaign['name']}")
-                    # As a last resort, allow reposting if no new products available
-                    # This prevents campaigns from going silent
-                    fallback_product = await amazon_paapi_client.search_items(
-                        keywords=keywords,
-                        min_rating=min_rating,
-                        filters=filters,
-                        browse_node_ids=browse_node_ids if browse_node_ids else None
-                    )
-                    if fallback_product:
-                        product_data = fallback_product
-                        print(f"DEBUG: Using fallback product (may be repost): {fallback_product.get('Title', 'Unknown')}")
+                    # DO NOT allow reposting - skip this posting cycle instead
+                    # The product discovery cycle should refill the queue
+                    error_msg = f"No new products available for campaign {campaign['name']}. Queue may be empty - waiting for product discovery cycle."
+                    print(f"⏭️  {error_msg}")
+                    # Optionally notify admin if queue is consistently empty
+                    queue_size = await campaign_manager_instance.get_queue_size(campaign_id)
+                    if queue_size == 0:
+                        await self._notify_admin(f"⚠️  Campaign '{campaign['name']}' queue is empty. Product discovery cycle should refill it soon.")
+                    return  # Skip posting instead of reposting
 
             if not product_data:
                 error_msg = f"No product data available for campaign {campaign['name']}"
