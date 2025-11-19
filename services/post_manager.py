@@ -198,7 +198,10 @@ class PostManager:
                         print(f"DEBUG: Enhanced search threw exception: {e}")
                         multiple_products = None
 
-                    print(f"DEBUG: Enhanced search returned: {multiple_products}")
+                    # Truncate log to first 100 chars to reduce verbosity
+                    products_str = str(multiple_products)
+                    truncated = products_str[:100] + "..." if len(products_str) > 100 else products_str
+                    print(f"DEBUG: Enhanced search returned: {truncated}")
 
                     if multiple_products and len(multiple_products) > 0:
                         print(f"DEBUG: Found {len(multiple_products)} candidate products")
@@ -316,7 +319,7 @@ class PostManager:
             if campaign_categories and isinstance(campaign_categories, list) and len(campaign_categories) > 0:
                 # Use first category from campaign
                 category = campaign_categories[0]
-            
+
             if content_template_id:
                 # Use specific template
                 content_result = await content_generator.generate_post_content(product_data, language=language, category=category)
