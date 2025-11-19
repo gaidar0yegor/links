@@ -312,12 +312,19 @@ class PostManager:
 
         # --- Content Generation with Templates ---
         try:
+            # Get category from campaign (use first category if multiple exist)
+            campaign_categories = params.get('categories', [])
+            category = None
+            if campaign_categories and isinstance(campaign_categories, list) and len(campaign_categories) > 0:
+                # Use first category from campaign
+                category = campaign_categories[0]
+            
             if content_template_id:
                 # Use specific template
-                content_result = await content_generator.generate_post_content(product_data, language=language)
+                content_result = await content_generator.generate_post_content(product_data, language=language, category=category)
             else:
                 # Use category-based template selection
-                content_result = await content_generator.generate_post_content(product_data, language=language)
+                content_result = await content_generator.generate_post_content(product_data, language=language, category=category)
 
             # Convert to post content format if needed
             if content_result and not isinstance(content_result, dict):
