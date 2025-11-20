@@ -49,7 +49,7 @@ def get_campaign_edit_keyboard(campaign_id: int, current_status: str) -> InlineK
     buttons = [
         [status_button],
         # MODIFIED: Points to the new multi-select timing handler
-        [InlineKeyboardButton(text="⏰ Установить/Изменить тайминги (2.4)", callback_data=f"campaign_edit_timings:{campaign_id}")],
+        [InlineKeyboardButton(text="⏰ Установить/Изменить тайминги", callback_data=f"campaign_edit_timings:{campaign_id}")],
         # MODIFIED: Points to the new delete confirmation handler
         [InlineKeyboardButton(text="🗑 Удалить кампанию", callback_data=f"campaign_delete_confirm:{campaign_id}")],
         [InlineKeyboardButton(text="⬅️ Назад к списку", callback_data="back_to_campaign_menu")]
@@ -92,14 +92,15 @@ async def enter_campaign_module(callback: CallbackQuery, state: FSMContext):
         traceback.print_exc()
         campaigns = []
 
-    text = "**🎯 Affiliate Campaigns Management**\n\nChoose an operation or select a campaign to edit:"
+    text = "<b>🎯 Управление рекламными кампаниями</b>\n\nВыберите операцию или кампанию для редактирования:"
 
     keyboard = get_campaign_menu_keyboard(campaigns)
     print(f"⌨️ Generated keyboard with {len(keyboard.inline_keyboard)} buttons")
 
     await callback.message.edit_text(
         text,
-        reply_markup=keyboard
+        reply_markup=keyboard,
+        parse_mode="HTML"
     )
     await callback.answer()
 
@@ -136,15 +137,16 @@ async def enter_campaign_edit_menu(callback: CallbackQuery, state: FSMContext):
     status_emoji = "🟢" if campaign['status'] == 'running' else ("🔴" if campaign['status'] == 'stopped' else "🟡")
 
     text = (
-        f"**Управление кампанией: {campaign['name']}**\n\n"
-        f"Текущий статус: **{status_emoji} {campaign['status']}**\n"
+        f"<b>Управление кампанией: {campaign['name']}</b>\n\n"
+        f"Текущий статус: <b>{status_emoji} {campaign['status']}</b>\n"
         f"Мин. рейтинг: {campaign['params'].get('min_rating', 'Не задан')}\n"
         # TODO: Добавить отображение текущих таймингов
     )
 
     await callback.message.edit_text(
         text,
-        reply_markup=get_campaign_edit_keyboard(campaign_id, campaign['status'])
+        reply_markup=get_campaign_edit_keyboard(campaign_id, campaign['status']),
+        parse_mode="HTML"
     )
     await callback.answer()
 
@@ -201,7 +203,7 @@ async def edit_campaign_timings(query_or_message: CallbackQuery | Message, state
     for i, day in enumerate(days_of_week):
         timing = timings.get(i)
         if timing:
-            timings_text += f"\n- **{day}**: {timing['start_time'].strftime('%H:%M')} - {timing['end_time'].strftime('%H:%M')}"
+            timings_text += f"\n- <b>{day}</b>: {timing['start_time'].strftime('%H:%M')} - {timing['end_time'].strftime('%H:%M')}"
 
     if not timings_text:
         timings_text = "\n- Тайминги еще не настроены."
@@ -221,17 +223,17 @@ async def edit_campaign_timings(query_or_message: CallbackQuery | Message, state
     )
 
     message_text = (
-        f"**🗓️ Настройка Времени Постинга для '{campaign_name}'**\n"
-        f"\n**Текущие настройки:**{timings_text}\n\n"
+        f"<b>🗓️ Настройка Времени Постинга для '{campaign_name}'</b>\n"
+        f"\n<b>Текущие настройки:</b>{timings_text}\n\n"
         "Выберите дни, для которых вы хотите установить или изменить время. "
         "Нажмите 'Готово', когда закончите выбор."
     )
 
     if isinstance(query_or_message, CallbackQuery):
-        await message.edit_text(message_text, reply_markup=keyboard)
+        await message.edit_text(message_text, reply_markup=keyboard, parse_mode="HTML")
         await query_or_message.answer()
     else:
-        await message.answer(message_text, reply_markup=keyboard)
+        await message.answer(message_text, reply_markup=keyboard, parse_mode="HTML")
 
 
 @router.callback_query(F.data.startswith("select_toggle:"), CampaignStates.timing_select_days)
@@ -309,12 +311,13 @@ async def timing_days_done(callback: CallbackQuery, state: FSMContext):
     selected_day_names = [days_of_week[int(i)] for i in selected_days]
 
     await callback.message.edit_text(
-        f"**🕒 Выбраны дни:** {', '.join(selected_day_names)}\n\n"
-        "Теперь введите **время начала** для этих дней.\n"
-        "Формат: **HH:MM** (например, 09:00)",
+        f"<b>🕒 Выбраны дни:</b> {', '.join(selected_day_names)}\n\n"
+        "Теперь введите <b>время начала</b> для этих дней.\n"
+        "Формат: <b>HH:MM</b> (например, 09:00)",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="⬅️ Назад", callback_data=f"campaign_edit_timings:{data['campaign_id']}")]
-        ])
+        ]),
+        parse_mode="HTML"
     )
     await callback.answer()
 
@@ -328,9 +331,9 @@ async def timing_input_start(message: Message, state: FSMContext):
         datetime.strptime(start_time_str, "%H:%M").time()
         await state.update_data(start_time=start_time_str)  # Store the string
         await state.set_state(CampaignStates.timing_input_end)
-        await message.answer(f"✅ Время начала: **{start_time_str}**. Теперь введите **время окончания** (HH:MM):")
+        await message.answer(f"✅ Время начала: <b>{start_time_str}</b>. Теперь введите <b>время окончания</b> (HH:MM):", parse_mode="HTML")
     except ValueError:
-        await message.answer("❌ Неверный формат времени. Введите время в формате **HH:MM** (например, 09:00):")
+        await message.answer("❌ Неверный формат времени. Введите время в формате <b>HH:MM</b> (например, 09:00):", parse_mode="HTML")
 
 
 @router.message(CampaignStates.timing_input_end, F.text)
@@ -365,14 +368,15 @@ async def timing_input_end(message: Message, state: FSMContext):
         selected_day_names = [days_of_week[int(i)] for i in selected_days_indices]
 
         await message.answer(
-            f"✅ Тайминги для **{', '.join(selected_day_names)}** сохранены: **{start_time_obj.strftime('%H:%M')} - {end_time_obj.strftime('%H:%M')}**."
+            f"✅ Тайминги для <b>{', '.join(selected_day_names)}</b> сохранены: <b>{start_time_obj.strftime('%H:%M')} - {end_time_obj.strftime('%H:%M')}</b>.",
+            parse_mode="HTML"
         )
 
         await state.clear()
         await edit_campaign_timings(message, state, campaign_id)
 
     except ValueError:
-        await message.answer("❌ Неверный формат времени. Введите время в формате **HH:MM** (например, 23:30):")
+        await message.answer("❌ Неверный формат времени. Введите время в формате <b>HH:MM</b> (например, 23:30):", parse_mode="HTML")
     except Exception as e:
         bot_logger.log_error("Manage Module", e, f"Ошибка при сохранении времени окончания для кампании {campaign_id}")
         await message.answer("Произошла ошибка при сохранении. Попробуйте позже.")
@@ -398,12 +402,13 @@ async def confirm_delete_campaign(callback: CallbackQuery, state: FSMContext):
     await state.update_data(campaign_id=campaign_id)
 
     await callback.message.edit_text(
-        f"⚠️ **ВНИМАНИЕ!** Вы уверены, что хотите удалить кампанию **'{campaign['name']}'** и все ее тайминги?\n"
+        f"⚠️ <b>ВНИМАНИЕ!</b> Вы уверены, что хотите удалить кампанию <b>'{campaign['name']}'</b> и все ее тайминги?\n"
         "Это действие необратимо!",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="✅ Да, удалить окончательно", callback_data=f"campaign_delete_finalize:{campaign_id}")],
             [InlineKeyboardButton(text="⬅️ Отмена", callback_data=f"campaign_edit:{campaign_id}")]
-        ])
+        ]),
+        parse_mode="HTML"
     )
     await callback.answer()
 
@@ -429,7 +434,7 @@ async def finalize_delete_campaign(callback: CallbackQuery, state: FSMContext):
             callback.from_user.id
         )
 
-        await callback.message.edit_text(f"🗑 Кампания **'{campaign_name}'** успешно удалена.")
+        await callback.message.edit_text(f"🗑 Кампания <b>'{campaign_name}'</b> успешно удалена.", parse_mode="HTML")
 
         # Возврат в главное меню кампаний
         from handlers.campaigns.manage import enter_campaign_module

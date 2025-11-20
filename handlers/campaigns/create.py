@@ -122,8 +122,9 @@ async def start_new_campaign(callback: CallbackQuery, state: FSMContext):
     print(f"🔥 DEBUG: Loaded {len(options)} channel options")
 
     await callback.message.edit_text(
-        "**🎯 ШАГ 1: Affiliate Channels** (Мультивыбор)\n\n"
+        "<b>🎯 ШАГ 1: Affiliate Channels</b> (Мультивыбор)\n\n"
         "💰 Выберите Telegram каналы для автоматического постинга партнерских ссылок Amazon:",
+        parse_mode="HTML",
         reply_markup=get_multiselect_keyboard(
             options=options,
             selected_values=[], # Пока ничего не выбрано
@@ -152,9 +153,10 @@ async def done_select_channels(callback: CallbackQuery, state: FSMContext):
     print(f"🔥 DEBUG: Loaded {len(options)} category options for Step 2")
 
     await callback.message.edit_text(
-        "**🎯 ШАГ 2: Product Categories** (Мультивыбор)\n\n"
+        "<b>🎯 ШАГ 2: Product Categories</b> (Мультивыбор)\n\n"
         "📦 Выберите категории товаров для поиска на Amazon.\n"
         "После выбора категорий вы сможете выбрать подкатегории для каждой:",
+        parse_mode="HTML",
         reply_markup=get_multiselect_keyboard(
             options=options,
             selected_values=[], # Пока ничего не выбрано
@@ -224,18 +226,55 @@ async def show_subcategories_for_category(callback: CallbackQuery, state: FSMCon
         if sub['name'] in selected_subs:
             selected_indices.append(str(idx))
 
-    progress_text = f"**Категория {current_index + 1}/{len(selected_categories)}: {current_category}**\n\n"
+    progress_text = f"<b>Категория {current_index + 1}/{len(selected_categories)}: {current_category}</b>\n\n"
     progress_text += "Выберите подкатегории (или 'Выбрать все' для всей категории):"
 
     await state.set_state(CampaignStates.campaign_new_select_subcategory)
 
     await callback.message.edit_text(
-        f"**🎯 ШАГ 3: Подкатегории** (Мультивыбор)\n\n{progress_text}",
+        f"<b>🎯 ШАГ 3: Подкатегории</b> (Мультивыбор)\n\n{progress_text}",
+        parse_mode="HTML",
         reply_markup=get_multiselect_keyboard(
             options=options,
             selected_values=selected_indices,
             done_callback=f"campaign_done_subcategories:{current_index}",
-            back_callback="campaign_done_channels"
+            back_callback="back_to_categories_from_subcategories"
+        )
+    )
+    await callback.answer()
+
+@router.callback_query(F.data == "back_to_categories_from_subcategories", CampaignStates.campaign_new_select_subcategory)
+async def back_to_categories_from_subcategories(callback: CallbackQuery, state: FSMContext):
+    """Возвращает к выбору категорий из меню подкатегорий."""
+    data = await state.get_data()
+    selected_categories = data['new_campaign'].get('categories', [])
+    
+    # Сбрасываем индекс текущей категории
+    await state.update_data(
+        new_campaign={
+            **data['new_campaign'],
+            'current_category_index': 0
+        }
+    )
+    
+    await state.set_state(CampaignStates.campaign_new_select_category)
+    
+    # Загружаем категории
+    options = await get_options_from_gsheets("categories")
+    
+    # Получаем уже выбранные категории для отображения
+    selected_values = [cat for cat in selected_categories]
+    
+    await callback.message.edit_text(
+        "<b>🎯 ШАГ 2: Product Categories</b> (Мультивыбор)\n\n"
+        "📦 Выберите категории товаров для поиска на Amazon.\n"
+        "После выбора категорий вы сможете выбрать подкатегории для каждой:",
+        parse_mode="HTML",
+        reply_markup=get_multiselect_keyboard(
+            options=options,
+            selected_values=selected_values,
+            done_callback="campaign_done_categories",
+            back_callback="campaign_new_start"
         )
     )
     await callback.answer()
@@ -268,14 +307,16 @@ async def done_select_all_subcategories(callback: CallbackQuery, state: FSMConte
 
     # Опции рейтинга
     rating_options = [
+        ("3.5+ звёзд", "3.5"),
         ("4.0+ звёзд", "4.0"),
         ("4.5+ звёзд", "4.5"),
-        ("5.0 звёзд", "5.0")
+        ("4.8+ звёзд", "4.8")
     ]
 
     await callback.message.edit_text(
-        "**ШАГ 4: Выбор рейтинга** (Мультивыбор)\n\n"
+        "<b>ШАГ 4: Выбор рейтинга</b> (Мультивыбор)\n\n"
         "⭐ Выберите минимальный рейтинг товара:",
+        parse_mode="HTML",
         reply_markup=get_multiselect_keyboard(
             options=rating_options,
             selected_values=[],
@@ -308,10 +349,11 @@ async def done_select_rating(callback: CallbackQuery, state: FSMContext):
     await state.set_state(CampaignStates.campaign_new_input_min_price)
 
     await callback.message.edit_text(
-        f"**ШАГ 5: Минимальная цена**\n\n"
-        f"Текущий минимальный рейтинг: **{max_rating}**\n\n"
+        f"<b>ШАГ 5: Минимальная цена</b>\n\n"
+        f"Текущий минимальный рейтинг: <b>{max_rating}</b>\n\n"
         "Введите минимальную цену для товаров (например, `25` для €25). "
-        "Отправьте `0`, чтобы пропустить."
+        "Отправьте `0`, чтобы пропустить.",
+        parse_mode="HTML"
     )
     await callback.answer()
 
@@ -332,9 +374,10 @@ async def input_min_price(message: Message, state: FSMContext):
         await state.set_state(CampaignStates.campaign_new_input_min_saving_percent)
 
         await message.answer(
-            "**ШАГ 6: Минимальная скидка (%)**\n\n"
+            "<b>ШАГ 6: Минимальная скидка (%)</b>\n\n"
             "Введите минимальный процент скидки (например, `10` для 10%). "
-            "Отправьте `0`, чтобы пропустить."
+            "Отправьте `0`, чтобы пропустить.",
+            parse_mode="HTML"
         )
 
     except ValueError:
@@ -362,9 +405,10 @@ async def input_min_saving_percent(message: Message, state: FSMContext):
             [InlineKeyboardButton(text="Неважно", callback_data="fba:skip")]
         ])
         await message.answer(
-            "**ШАГ 7: Fulfilled By Amazon (FBA)**\n\n"
+            "<b>ШАГ 7: Fulfilled By Amazon (FBA)</b>\n\n"
             "Искать только товары, доставляемые Amazon?",
-            reply_markup=keyboard
+            reply_markup=keyboard,
+            parse_mode="HTML"
         )
 
     except ValueError:
@@ -389,15 +433,16 @@ async def select_fba(callback: CallbackQuery, state: FSMContext):
     await state.set_state(CampaignStates.campaign_new_input_max_sales_rank)
 
     await callback.message.edit_text(
-        "**ШАГ 8: Максимальный Sales Rank**\n\n"
-        "🎯 **Упрощенная система качества**\n\n"
+        "<b>ШАГ 8: Максимальный Sales Rank</b>\n\n"
+        "🎯 <b>Упрощенная система качества</b>\n\n"
         "Введите максимальный Sales Rank для товаров (рекомендуется: 10000).\n"
         "Чем меньше число, тем лучше продаются товары.\n\n"
         "Примеры:\n"
         "• `10000` - товары из топ-10000 продаж\n"
         "• `5000` - более качественные товары\n"
         "• `50000` - более широкий выбор\n\n"
-        "Отправьте число или `0` для значения по умолчанию (10000):"
+        "Отправьте число или `0` для значения по умолчанию (10000):",
+        parse_mode="HTML"
     )
     await callback.answer()
 
@@ -423,7 +468,8 @@ async def input_max_sales_rank(message: Message, state: FSMContext):
 
         language_options = await get_options_from_gsheets("languages")
         await message.answer(
-            "**ШАГ 9: Выбор языка объявлений**\n\nВыберите язык:",
+            "<b>ШАГ 9: Выбор языка объявлений</b>\n\nВыберите язык:",
+            parse_mode="HTML",
             reply_markup=get_multiselect_keyboard(
                 options=language_options,
                 selected_values=[],
@@ -456,7 +502,8 @@ async def done_select_language(callback: CallbackQuery, state: FSMContext):
     await state.set_state(CampaignStates.campaign_new_input_name)
 
     await callback.message.edit_text(
-        "**ШАГ 6/N: Ввод названия кампании**\n\nПожалуйста, введите уникальное название для новой кампании (текстовым сообщением):"
+        "<b>ШАГ 6/N: Ввод названия кампании</b>\n\nПожалуйста, введите уникальное название для новой кампании (текстовым сообщением):",
+        parse_mode="HTML"
     )
     await callback.answer()
 
@@ -493,12 +540,12 @@ async def input_campaign_name(message: Message, state: FSMContext):
             subcategories_info.append(f"{category}: {', '.join(subs)}")
 
     summary = f"""
-    ✅ **Параметры кампании собраны:**
+    ✅ <b>Параметры кампании собраны:</b>
 
-    - **Название:** {campaign_name}
-    - **Каналы:** {', '.join(new_campaign.get('channels', []))}
-    - **Категории:** {', '.join(new_campaign.get('categories', []))}
-    - **Подкатегории:** {len(subcategories_info)} категорий с подкатегориями
+    - <b>Название:</b> {campaign_name}
+    - <b>Каналы:</b> {', '.join(new_campaign.get('channels', []))}
+    - <b>Категории:</b> {', '.join(new_campaign.get('categories', []))}
+    - <b>Подкатегории:</b> {len(subcategories_info)} категорий с подкатегориями
     """
 
     if subcategories_info:
@@ -507,13 +554,13 @@ async def input_campaign_name(message: Message, state: FSMContext):
             summary += f"\n      ... и ещё {len(subcategories_info) - 3} категорий"
 
     summary += f"""
-    - **Мин. Рейтинг:** {new_campaign.get('rating', 'Не выбран')}
-    - **Мин. Цена:** €{new_campaign.get('min_price', 'Нет')}
-    - **Мин. Скидка:** {new_campaign.get('min_saving_percent', 'Нет')}%
-    - **FBA:** {new_campaign.get('fulfilled_by_amazon', 'Неважно')}
-    - **Язык:** {new_campaign.get('language', 'Не выбран')}
+    - <b>Мин. Рейтинг:</b> {new_campaign.get('rating', 'Не выбран')}
+    - <b>Мин. Цена:</b> €{new_campaign.get('min_price', 'Нет')}
+    - <b>Мин. Скидка:</b> {new_campaign.get('min_saving_percent', 'Нет')}%
+    - <b>FBA:</b> {new_campaign.get('fulfilled_by_amazon', 'Неважно')}
+    - <b>Язык:</b> {new_campaign.get('language', 'Не выбран')}
 
-    Вы готовы **СОХРАНИТЬ** кампанию?
+    Вы готовы <b>СОХРАНИТЬ</b> кампанию?
     """
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -521,7 +568,7 @@ async def input_campaign_name(message: Message, state: FSMContext):
         [InlineKeyboardButton(text="⬅️ Назад (Изменить название)", callback_data="campaign_done_language")] # Вернуться на Шаг 5
     ])
 
-    await message.answer(summary, reply_markup=keyboard)
+    await message.answer(summary, reply_markup=keyboard, parse_mode="HTML")
 
 
 # --- Общий Хэндлер для Обработки Мультивыбора ---
@@ -579,7 +626,7 @@ async def toggle_selection(callback: CallbackQuery, state: FSMContext):
             options = [(sub['name'], str(idx)) for idx, sub in enumerate(subcategories)]
             selected_indices = [str(idx) for idx, sub in enumerate(subcategories) if sub['name'] in selected_list]
 
-            progress_text = f"**Категория {current_index + 1}/{len(selected_categories)}: {current_category}**\n\n"
+            progress_text = f"<b>Категория {current_index + 1}/{len(selected_categories)}: {current_category}</b>\n\n"
             progress_text += "Выберите подкатегории (или 'Выбрать все' для всей категории):"
 
             await callback.message.edit_reply_markup(
@@ -587,7 +634,7 @@ async def toggle_selection(callback: CallbackQuery, state: FSMContext):
                     options=options,
                     selected_values=selected_indices,
                     done_callback=f"campaign_done_subcategories:{current_index}",
-                    back_callback="campaign_done_channels"
+                    back_callback="back_to_categories_from_subcategories"
                 )
             )
         await callback.answer()
@@ -616,9 +663,10 @@ async def toggle_selection(callback: CallbackQuery, state: FSMContext):
     if key == 'ratings':
         # Hardcoded options for rating
         options = [
+            ("3.5+ звёзд", "3.5"),
             ("4.0+ звёзд", "4.0"),
             ("4.5+ звёзд", "4.5"),
-            ("5.0 звёзд", "5.0")
+            ("4.8+ звёзд", "4.8")
         ]
         done_callback = "campaign_done_rating"
         back_callback = "campaign_done_categories"
@@ -636,7 +684,7 @@ async def toggle_selection(callback: CallbackQuery, state: FSMContext):
         # Определяем нужный back_callback
         if key == 'channels': back_callback = "back_to_campaign_menu"
         elif key == 'categories': back_callback = "campaign_new_start" # Go back to the start of channel selection
-        elif key == 'subcategories': back_callback = "campaign_done_channels" # Go back to the start of category selection
+        elif key == 'subcategories': back_callback = "back_to_categories_from_subcategories" # Go back to category selection
 
     await callback.message.edit_reply_markup(
         reply_markup=get_multiselect_keyboard(
@@ -691,7 +739,7 @@ async def toggle_select_all(callback: CallbackQuery, state: FSMContext):
             # Redraw keyboard with indices
             options = [(sub['name'], str(idx)) for idx, sub in enumerate(subcategories)]
             selected_indices = [str(idx) for idx, sub in enumerate(subcategories) if sub['name'] in subcategories_data[current_category]]
-            progress_text = f"**Категория {current_index + 1}/{len(selected_categories)}: {current_category}**\n\n"
+            progress_text = f"<b>Категория {current_index + 1}/{len(selected_categories)}: {current_category}</b>\n\n"
             progress_text += "Выберите подкатегории (или 'Выбрать все' для всей категории):"
 
             await callback.message.edit_reply_markup(
@@ -699,7 +747,7 @@ async def toggle_select_all(callback: CallbackQuery, state: FSMContext):
                     options=options,
                     selected_values=selected_indices,
                     done_callback=f"campaign_done_subcategories:{current_index}",
-                    back_callback="campaign_done_channels"
+                    back_callback="back_to_categories_from_subcategories"
                 )
             )
         await callback.answer()
@@ -708,9 +756,10 @@ async def toggle_select_all(callback: CallbackQuery, state: FSMContext):
         key = 'ratings'
         # Hardcoded options for rating
         options = [
+            ("3.5+ звёзд", "3.5"),
             ("4.0+ звёзд", "4.0"),
             ("4.5+ звёзд", "4.5"),
-            ("5.0 звёзд", "5.0")
+            ("4.8+ звёзд", "4.8")
         ]
         done_callback = "campaign_done_rating"
         back_callback = "campaign_done_categories"
@@ -820,9 +869,10 @@ async def finalize_and_save_campaign(callback: CallbackQuery, state: FSMContext)
         campaign_id = await campaign_mgr.save_new_campaign(campaign_data)
 
         await callback.message.edit_text(
-            f"🎉 Кампания **'{campaign_name}'** успешно создана с ID: {campaign_id}.\n"
-            f"Текущий статус: **Не выбраны тайминги**.\n\n"
-            "Вы можете продолжить работу в Главном меню."
+            f"🎉 Кампания <b>'{campaign_name}'</b> успешно создана с ID: {campaign_id}.\n"
+            f"Текущий статус: <b>Не выбраны тайминги</b>.\n\n"
+            "Вы можете продолжить работу в Главном меню.",
+            parse_mode="HTML"
         )
 
         # Сброс FSM и переход в меню кампаний

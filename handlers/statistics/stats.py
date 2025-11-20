@@ -14,21 +14,21 @@ router = Router()
 def get_stats_keyboard() -> InlineKeyboardMarkup:
     """Клавиатура для модуля статистики."""
     buttons = [
-        [InlineKeyboardButton(text="📤 Upload CSV Report", callback_data="stats_upload_csv")],
-        [InlineKeyboardButton(text="📊 View Analytics", callback_data="stats_view_analytics")],
-        [InlineKeyboardButton(text="🔄 Refresh Data", callback_data="stats_refresh")],
-        [InlineKeyboardButton(text="⬅️ Main Menu", callback_data="back_to_main_menu")]
+        [InlineKeyboardButton(text="📤 Загрузить CSV отчет", callback_data="stats_upload_csv")],
+        [InlineKeyboardButton(text="📊 Просмотр аналитики", callback_data="stats_view_analytics")],
+        [InlineKeyboardButton(text="🔄 Обновить данные", callback_data="stats_refresh")],
+        [InlineKeyboardButton(text="⬅️ Главное меню", callback_data="back_to_main_menu")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def get_analytics_keyboard() -> InlineKeyboardMarkup:
     """Клавиатура для выбора периода аналитики."""
     buttons = [
-        [InlineKeyboardButton(text="📅 Last 7 Days", callback_data="analytics_period:7")],
-        [InlineKeyboardButton(text="📅 Last 30 Days", callback_data="analytics_period:30")],
-        [InlineKeyboardButton(text="📅 Last 90 Days", callback_data="analytics_period:90")],
-        [InlineKeyboardButton(text="🎯 By Tracking ID", callback_data="analytics_tracking")],
-        [InlineKeyboardButton(text="⬅️ Back to Stats", callback_data="back_to_stats")]
+        [InlineKeyboardButton(text="📅 Последние 7 дней", callback_data="analytics_period:7")],
+        [InlineKeyboardButton(text="📅 Последние 30 дней", callback_data="analytics_period:30")],
+        [InlineKeyboardButton(text="📅 Последние 90 дней", callback_data="analytics_period:90")],
+        [InlineKeyboardButton(text="🎯 По Tracking ID", callback_data="analytics_tracking")],
+        [InlineKeyboardButton(text="⬅️ Назад к статистике", callback_data="back_to_stats")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -49,22 +49,22 @@ async def refresh_stats(callback: CallbackQuery):
         stats_data = []
 
     # Форматирование
-    text = "**📊 Revenue Analytics**\n\n"
+    text = "<b>📊 Аналитика доходов</b>\n\n"
     if len(stats_data) > 1:
         headers = stats_data[0]
         latest_data = stats_data[1] # Берем, например, последнюю строку (общие данные)
 
         # Пример простого форматирования:
-        text += f"📅 Last Update: {latest_data[0] if len(latest_data)>0 else 'N/A'}\n"
-        text += f"💰 Total Revenue: {latest_data[1] if len(latest_data)>1 else 'N/A'}\n"
-        text += f"🔗 Total Clicks: {latest_data[2] if len(latest_data)>2 else 'N/A'}\n"
-        text += f"🛒 Total Sales: {latest_data[3] if len(latest_data)>3 else 'N/A'}\n"
-        text += "\n*Data sourced from Google Sheets (statistics table)."
+        text += f"📅 Последнее обновление: {latest_data[0] if len(latest_data)>0 else 'N/A'}\n"
+        text += f"💰 Общий доход: {latest_data[1] if len(latest_data)>1 else 'N/A'}\n"
+        text += f"🔗 Всего кликов: {latest_data[2] if len(latest_data)>2 else 'N/A'}\n"
+        text += f"🛒 Всего продаж: {latest_data[3] if len(latest_data)>3 else 'N/A'}\n"
+        text += "\n*Данные из Google Sheets (таблица statistics)."
     else:
-        text += "No data available. Please ensure the 'statistics' table is populated."
+        text += "Данные недоступны. Убедитесь, что таблица 'statistics' заполнена."
 
-    await callback.message.edit_text(text, reply_markup=get_stats_keyboard())
-    await callback.answer("📊 Statistics refreshed!", show_alert=False)
+    await callback.message.edit_text(text, reply_markup=get_stats_keyboard(), parse_mode="HTML")
+    await callback.answer("📊 Статистика обновлена!", show_alert=False)
 
 async def enter_stats_module(callback: CallbackQuery):
     """Отображает статистику продаж (called from main_menu.py)."""
@@ -79,46 +79,46 @@ async def enter_stats_module(callback: CallbackQuery):
         stats_data = []
 
     # Форматирование
-    text = "**📊 Revenue Analytics**\n\n"
+    text = "<b>📊 Аналитика доходов</b>\n\n"
     if len(stats_data) > 1:
         headers = stats_data[0]
         latest_data = stats_data[1] # Берем, например, последнюю строку (общие данные)
 
         # Пример простого форматирования:
-        text += f"📅 Last Update: {latest_data[0] if len(latest_data)>0 else 'N/A'}\n"
-        text += f"💰 Total Revenue: {latest_data[1] if len(latest_data)>1 else 'N/A'}\n"
-        text += f"🔗 Total Clicks: {latest_data[2] if len(latest_data)>2 else 'N/A'}\n"
-        text += f"🛒 Total Sales: {latest_data[3] if len(latest_data)>3 else 'N/A'}\n"
-        text += "\n*Data sourced from Google Sheets (statistics table)."
+        text += f"📅 Последнее обновление: {latest_data[0] if len(latest_data)>0 else 'N/A'}\n"
+        text += f"💰 Общий доход: {latest_data[1] if len(latest_data)>1 else 'N/A'}\n"
+        text += f"🔗 Всего кликов: {latest_data[2] if len(latest_data)>2 else 'N/A'}\n"
+        text += f"🛒 Всего продаж: {latest_data[3] if len(latest_data)>3 else 'N/A'}\n"
+        text += "\n*Данные из Google Sheets (таблица statistics)."
     else:
-        text += "No data available. Please ensure the 'statistics' table is populated."
+        text += "Данные недоступны. Убедитесь, что таблица 'statistics' заполнена."
 
-    await callback.message.edit_text(text, reply_markup=get_stats_keyboard())
+    await callback.message.edit_text(text, reply_markup=get_stats_keyboard(), parse_mode="HTML")
     await callback.answer()
 
 @router.callback_query(F.data == "stats_upload_csv")
 async def request_csv_upload(callback: CallbackQuery, state: FSMContext):
     """Запрашивает загрузку CSV файла с отчетом продаж."""
     await state.set_state("waiting_for_csv")
-    text = "**📤 Upload Amazon Sales Report**\n\n"
-    text += "Please upload your Amazon affiliate sales report CSV file.\n"
-    text += "The file should contain columns: Categoria, Prodotto, ASIN, Data, Quantità, Prezzo (€), Tipo di link, Tag, etc.\n\n"
-    text += "Supported format: All_orders CSV from Amazon Associates\n\n"
-    text += "⬅️ Use /menu to return to main menu"
+    text = "<b>📤 Загрузить отчет о продажах Amazon</b>\n\n"
+    text += "Пожалуйста, загрузите CSV файл с отчетом о продажах Amazon.\n"
+    text += "Файл должен содержать колонки: Categoria, Prodotto, ASIN, Data, Quantità, Prezzo (€), Tipo di link, Tag и т.д.\n\n"
+    text += "Поддерживаемый формат: All_orders CSV от Amazon Associates\n\n"
+    text += "⬅️ Используйте /menu для возврата в главное меню"
 
-    await callback.message.edit_text(text)
-    await callback.answer("📤 Ready for CSV upload", show_alert=False)
+    await callback.message.edit_text(text, parse_mode="HTML")
+    await callback.answer("📤 Готов к загрузке CSV", show_alert=False)
 
 @router.callback_query(F.data == "stats_view_analytics")
 async def show_analytics_menu(callback: CallbackQuery):
     """Показывает меню аналитики с выбором периода."""
-    text = "**📊 Revenue Analytics Dashboard**\n\n"
-    text += "Choose your analytics view:\n\n"
-    text += "📅 **Time-based:** Filter by date ranges\n"
-    text += "🎯 **Tracking ID:** Filter by specific affiliate tags\n\n"
-    text += "Select a period or filter option:"
+    text = "<b>📊 Панель аналитики доходов</b>\n\n"
+    text += "Выберите вид аналитики:\n\n"
+    text += "📅 **По времени:** Фильтр по периодам\n"
+    text += "🎯 **Tracking ID:** Фильтр по конкретным тегам\n\n"
+    text += "Выберите период или опцию фильтра:"
 
-    await callback.message.edit_text(text, reply_markup=get_analytics_keyboard())
+    await callback.message.edit_text(text, reply_markup=get_analytics_keyboard(), parse_mode="HTML")
     await callback.answer()
 
 @router.callback_query(F.data.startswith("analytics_period:"))
@@ -129,24 +129,24 @@ async def show_period_analytics(callback: CallbackQuery):
     # Get data from stored CSV or Google Sheets
     analytics_data = await get_analytics_data(days=days)
 
-    text = f"**📊 Analytics - Last {days} Days**\n\n"
+    text = f"<b>📊 Аналитика - Последние {days} дней</b>\n\n"
 
     if analytics_data:
-        text += f"💰 **Total Revenue:** €{analytics_data.get('total_revenue', 0):.2f}\n"
-        text += f"🛒 **Total Orders:** {analytics_data.get('total_orders', 0)}\n"
-        text += f"📦 **Total Items:** {analytics_data.get('total_items', 0)}\n"
-        text += f"🎯 **Active Tracking IDs:** {analytics_data.get('active_tags', 0)}\n\n"
+        text += f"💰 <b>Общий доход:</b> €{analytics_data.get('total_revenue', 0):.2f}\n"
+        text += f"🛒 <b>Всего заказов:</b> {analytics_data.get('total_orders', 0)}\n"
+        text += f"📦 <b>Всего товаров:</b> {analytics_data.get('total_items', 0)}\n"
+        text += f"🎯 <b>Активных Tracking ID:</b> {analytics_data.get('active_tags', 0)}\n\n"
 
         # Top products
         top_products = analytics_data.get('top_products', [])
         if top_products:
-            text += "**🏆 Top Products:**\n"
+            text += "<b>🏆 Топ товаров:</b>\n"
             for i, product in enumerate(top_products[:5], 1):
                 text += f"{i}. {product.get('name', 'N/A')} (€{product.get('revenue', 0):.2f})\n"
     else:
-        text += "No data available for this period.\nUpload a CSV report first."
+        text += "Данные за этот период недоступны.\nСначала загрузите CSV отчет."
 
-    await callback.message.edit_text(text, reply_markup=get_analytics_keyboard())
+    await callback.message.edit_text(text, reply_markup=get_analytics_keyboard(), parse_mode="HTML")
     await callback.answer()
 
 @router.callback_query(F.data == "analytics_tracking")
@@ -157,15 +157,15 @@ async def request_tracking_id_filter(callback: CallbackQuery, state: FSMContext)
     # Get available tracking IDs
     available_tags = await get_available_tracking_ids()
 
-    text = "**🎯 Filter by Tracking ID**\n\n"
+    text = "<b>🎯 Фильтр по Tracking ID</b>\n\n"
     if available_tags:
-        text += "Available Tracking IDs:\n"
+        text += "Доступные Tracking ID:\n"
         for tag in available_tags[:10]:  # Show first 10
             text += f"• {tag}\n"
         text += "\n"
-    text += "Enter a Tracking ID to filter analytics:"
+    text += "Введите Tracking ID для фильтрации аналитики:"
 
-    await callback.message.edit_text(text)
+    await callback.message.edit_text(text, parse_mode="HTML")
     await callback.answer()
 
 @router.callback_query(F.data == "back_to_stats")
@@ -180,7 +180,7 @@ async def handle_csv_upload(message: Message, state: FSMContext):
         # Check if we're waiting for CSV
         current_state = await state.get_state()
         if current_state != "waiting_for_csv":
-            await message.answer("❌ Not expecting a CSV file right now. Use the statistics menu to upload reports.")
+            await message.answer("❌ CSV файл не ожидается сейчас. Используйте меню статистики для загрузки отчетов.")
             return
 
         # Download the file
@@ -202,20 +202,20 @@ async def handle_csv_upload(message: Message, state: FSMContext):
 
         # Show success message with summary
         summary = processed_data.get('summary', {})
-        text = "**✅ CSV Report Processed Successfully!**\n\n"
-        text += f"📊 **Report Summary:**\n"
-        text += f"• Orders: {summary.get('total_orders', 0)}\n"
-        text += f"• Revenue: €{summary.get('total_revenue', 0):.2f}\n"
-        text += f"• Items: {summary.get('total_items', 0)}\n"
-        text += f"• Date Range: {summary.get('date_range', 'N/A')}\n"
-        text += f"• Tracking IDs: {summary.get('tracking_ids', 0)}\n\n"
-        text += "Data has been stored and is available in analytics."
+        text = "<b>✅ CSV отчет успешно обработан!</b>\n\n"
+        text += f"📊 <b>Сводка отчета:</b>\n"
+        text += f"• Заказов: {summary.get('total_orders', 0)}\n"
+        text += f"• Доход: €{summary.get('total_revenue', 0):.2f}\n"
+        text += f"• Товаров: {summary.get('total_items', 0)}\n"
+        text += f"• Период: {summary.get('date_range', 'N/A')}\n"
+        text += f"• Tracking ID: {summary.get('tracking_ids', 0)}\n\n"
+        text += "Данные сохранены и доступны в аналитике."
 
-        await message.answer(text, reply_markup=get_stats_keyboard())
+        await message.answer(text, reply_markup=get_stats_keyboard(), parse_mode="HTML")
 
     except Exception as e:
         await state.clear()
-        await message.answer(f"❌ Error processing CSV file: {str(e)}\n\nPlease ensure it's a valid Amazon All_orders CSV file.")
+        await message.answer(f"❌ Ошибка обработки CSV файла: {str(e)}\n\nУбедитесь, что это валидный CSV файл All_orders от Amazon.")
         print(f"CSV processing error: {e}")
 
 @router.message(F.text & ~F.document)
@@ -232,24 +232,24 @@ async def handle_tracking_id_input(message: Message, state: FSMContext):
 
     await state.clear()
 
-    text = f"**🎯 Analytics for Tracking ID: {tracking_id}**\n\n"
+    text = f"<b>🎯 Аналитика для Tracking ID: {tracking_id}</b>\n\n"
 
     if analytics_data:
-        text += f"💰 **Revenue:** €{analytics_data.get('total_revenue', 0):.2f}\n"
-        text += f"🛒 **Orders:** {analytics_data.get('total_orders', 0)}\n"
-        text += f"📦 **Items:** {analytics_data.get('total_items', 0)}\n"
-        text += f"📅 **Date Range:** {analytics_data.get('date_range', 'N/A')}\n\n"
+        text += f"💰 <b>Доход:</b> €{analytics_data.get('total_revenue', 0):.2f}\n"
+        text += f"🛒 <b>Заказов:</b> {analytics_data.get('total_orders', 0)}\n"
+        text += f"📦 <b>Товаров:</b> {analytics_data.get('total_items', 0)}\n"
+        text += f"📅 <b>Период:</b> {analytics_data.get('date_range', 'N/A')}\n\n"
 
         # Show top products for this tracking ID
         top_products = analytics_data.get('top_products', [])
         if top_products:
-            text += "**🏆 Top Products:**\n"
+            text += "<b>🏆 Топ товаров:</b>\n"
             for i, product in enumerate(top_products[:5], 1):
                 text += f"{i}. {product.get('name', 'N/A')} (€{product.get('revenue', 0):.2f})\n"
     else:
-        text += f"No data found for Tracking ID '{tracking_id}'."
+        text += f"Данные для Tracking ID '{tracking_id}' не найдены."
 
-    await message.answer(text, reply_markup=get_analytics_keyboard())
+    await message.answer(text, reply_markup=get_analytics_keyboard(), parse_mode="HTML")
 
 # Helper functions for data processing
 

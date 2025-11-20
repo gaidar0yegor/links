@@ -425,7 +425,9 @@ class PostManager:
                 print(f"✅ Posted to {channel_name} for campaign {campaign['name']}")
 
             except Exception as e:
-                print(f"❌ Failed to post to {channel_name}: {e}")
+                error_msg = f"❌ Failed to post to {channel_name} for campaign '{campaign['name']}': {e}"
+                print(error_msg)
+                await self._notify_admin(f"🚨 Ошибка постинга: {error_msg}")
 
         # --- Statistics Logging ---
         try:
@@ -591,7 +593,9 @@ class PostManager:
                 print(f"✅ Posted queued product to {channel_name} for campaign {campaign['name']}")
 
             except Exception as e:
-                print(f"❌ Failed to post queued product to {channel_name}: {e}")
+                error_msg = f"❌ Failed to post queued product to {channel_name} for campaign '{campaign['name']}': {e}"
+                print(error_msg)
+                await self._notify_admin(f"🚨 Ошибка постинга (очередь): {error_msg}")
 
         # --- Statistics Logging ---
         try:

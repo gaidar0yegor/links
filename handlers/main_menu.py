@@ -8,12 +8,12 @@ from keyboards.main_menu import main_menu_keyboard
 
 router = Router()
 
-async def show_main_menu(message: Message | CallbackQuery, text: str = "🎉 Welcome to Affiliate Marketing Bot!\n🤖 Amazon Affiliate Marketing System\n💰 Automated revenue generation\n\nChoose your action:") -> None:
+async def show_main_menu(message: Message | CallbackQuery, text: str = "🎉 <b>Добро пожаловать в Affiliate Marketing Bot!</b>\n\n🤖 <b>Amazon Affiliate Marketing System</b>\n💰 Автоматизированная генерация дохода от партнерских ссылок\n\n✅ Авторизация успешна! Выберите действие в главном меню:") -> None:
     """Отображает главное меню."""
     if isinstance(message, Message):
-        await message.answer(text, reply_markup=main_menu_keyboard())
+        await message.answer(text, reply_markup=main_menu_keyboard(), parse_mode="HTML")
     else: # Если это CallbackQuery, редактируем предыдущее сообщение
-        await message.message.edit_text(text, reply_markup=main_menu_keyboard())
+        await message.message.edit_text(text, reply_markup=main_menu_keyboard(), parse_mode="HTML")
 
 
 # Хэндлер для перехода в меню после успешного старта/авторизации
@@ -30,13 +30,13 @@ async def main_menu_entry(update: Message | CallbackQuery):
 @router.message(F.text == "test")
 async def test_message_handler(message: Message):
     print("🔥 DEBUG: Test message handler called")
-    await message.answer("Test message received!")
+    await message.answer("Тестовое сообщение получено!")
 
 # Handler for campaigns button
 @router.callback_query(F.data == "campaigns_module")
 async def campaigns_handler(callback_query: CallbackQuery, state: FSMContext):
     print(f"🎯 Affiliate Campaigns module accessed: {callback_query.data}")
-    await callback_query.answer("🎯 Opening Affiliate Campaigns...", show_alert=False)
+    await callback_query.answer("🎯 Открываю Рекламные кампании...", show_alert=False)
     # Import function from campaigns module
     from handlers.campaigns.manage import enter_campaign_module
     await enter_campaign_module(callback_query, state)
@@ -45,7 +45,7 @@ async def campaigns_handler(callback_query: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "stats_module")
 async def stats_handler(callback_query: CallbackQuery):
     print(f"📊 Revenue Analytics module accessed: {callback_query.data}")
-    await callback_query.answer("📊 Opening Revenue Analytics...", show_alert=False)
+    await callback_query.answer("📊 Открываю Статистику...", show_alert=False)
     # Import function from statistics module
     from handlers.statistics.stats import enter_stats_module
     await enter_stats_module(callback_query)
