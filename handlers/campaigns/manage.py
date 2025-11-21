@@ -153,8 +153,12 @@ async def enter_campaign_edit_menu(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("campaign_status:"))
 async def toggle_campaign_status(callback: CallbackQuery, state: FSMContext):
     """Запуск или остановка кампании (2.5)."""
-    _, action, campaign_id_str = callback.data.split(":")
-    campaign_id = int(campaign_id_str)
+    try:
+        _, action, campaign_id_str = callback.data.split(":")
+        campaign_id = int(campaign_id_str)
+    except ValueError:
+        await callback.answer("❌ Неверный формат ID кампании.", show_alert=True)
+        return
 
     # 1. Проверяем, можно ли запустить (только если есть тайминги)
     campaign_mgr = get_campaign_manager()

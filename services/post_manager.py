@@ -6,6 +6,8 @@ from io import BytesIO
 from services.sheets_api import sheets_api
 from services.amazon_paapi_client import amazon_paapi_client
 from services.llm_client import OpenAIClient
+from typing import Optional
+
 
 class PostManager:
     """Управляет бизнес-логикой: API, Рерайт, Водяные знаки, Постинг."""
@@ -18,25 +20,30 @@ class PostManager:
             print(f"⚠️  Не удалось инициализировать LLM клиент: {e}. Рерайт будет недоступен.")
             self.llm_client = None
 
-    async def _notify_admin(self, message: str):
-        """Отправляет уведомление администратору при критических ошибках (ТЗ 5.2)."""
-        try:
-            # Получаем ID администратора из конфигурации или используем первый из whitelist
-            admin_id = None
-            if hasattr(self.bot, 'admin_id'):
-                admin_id = self.bot.admin_id
-            else:
-                # Получаем из whitelist
-                whitelist = sheets_api.get_whitelist()
-                if whitelist:
-                    admin_id = whitelist[0]  # Первый пользователь из whitelist
+    async def _notify_user(self, message: str, user_id: Optional[int] = None):
+        """Отправляет уведомление целевому пользователю или администратору в качестве фолбэка."""
+        target_id = user_id
 
-            if admin_id:
-                await self.bot.send_message(chat_id=admin_id, text=message)
-            else:
-                print(f"⚠️  Не удалось отправить уведомление администратору: admin_id не найден")
-        except Exception as e:
-            print(f"⚠️  Ошибка отправки уведомления администратору: {e}")
+        if not target_id:
+            try:
+                # Фолбэк: получаем ID администратора из конфигурации или используем первый из whitelist
+                if hasattr(self.bot, 'admin_id'):
+                    target_id = self.bot.admin_id
+                else:
+                    whitelist = sheets_api.get_whitelist()
+                    if whitelist:
+                        target_id = whitelist[0]  # Первый пользователь из whitelist
+            except Exception as e:
+                print(f"⚠️  Не удалось получить ID администратора для фолбэк-уведомления: {e}")
+                return
+
+        if target_id:
+            try:
+                await self.bot.send_message(chat_id=target_id, text=message)
+            except Exception as e:
+                print(f"⚠️  Ошибка отправки уведомления пользователю {target_id}: {e}")
+        else:
+            print(f"⚠️  Не удалось отправить уведомление: ID получателя не найден.")
 
     def _get_rewrite_prompt(self):
         """Получает промпт для рерайта из Google Sheets (таблица rewrite_prompt)."""
@@ -114,6 +121,7 @@ class PostManager:
         params = campaign.get('params', {})
         campaign_id = campaign.get('id')
         language = params.get('language', 'en')
+        user_id = params.get('created_by_user_id')
 
         # Get enhanced configuration
         content_template_id = params.get('content_template_id')
@@ -147,8 +155,6 @@ class PostManager:
                 filters = {}
                 if params.get('min_price'):
                     filters['MinPrice'] = params['min_price']
-                if params.get('min_saving_percent'):
-                    filters['MinSavingPercent'] = params['min_saving_percent']
                 if params.get('fulfilled_by_amazon') is not None:
                     filters['FulfilledByAmazon'] = params['fulfilled_by_amazon']
 
@@ -158,7 +164,9 @@ class PostManager:
                 if subcategories:
                     keywords_parts.extend(subcategories)
 
-                keywords = " ".join(keywords_parts) if keywords_parts else "popular product"
+                # Use dict.fromkeys to get unique keywords while preserving order
+                unique_keywords = list(dict.fromkeys(keywords_parts))
+                keywords = " ".join(unique_keywords) if unique_keywords else "popular product"
 
                 # Use browse_node_ids from campaign params if available (new unified categories system)
                 browse_node_ids = params.get('browse_node_ids', [])
@@ -189,8 +197,8 @@ class PostManager:
                             browse_node_ids=browse_node_ids,
                             min_rating=min_rating,
                             min_price=params.get('min_price'),
-                            min_saving_percent=params.get('min_saving_percent'),
                             fulfilled_by_amazon=params.get('fulfilled_by_amazon'),
+                            max_sales_rank=params.get('max_sales_rank'),
                             max_results=20  # Get up to 20 products for variety
                         )
                         print(f"DEBUG: Enhanced search completed without exception")
@@ -243,6 +251,8 @@ class PostManager:
                                 import random
                                 selected_product = random.choice(quality_products)
                                 print(f"DEBUG: Selected quality product: {selected_product.get('title', 'Unknown')} (ASIN: {selected_product.get('asin')})")
+                                if selected_product.get('discount_percent'):
+                                    print(f"DEBUG: Product discount: {selected_product.get('discount_percent')}%")
 
                                 # Convert to the format expected by the rest of the system
                                 product_data = {
@@ -275,7 +285,8 @@ class PostManager:
                             keywords=keywords,
                             min_rating=min_rating,
                             filters=filters,
-                            browse_node_ids=browse_node_ids if browse_node_ids else None
+                            browse_node_ids=browse_node_ids if browse_node_ids else None,
+                            exclude_asins=posted_asins
                         )
 
                         if candidate_product:
@@ -291,24 +302,27 @@ class PostManager:
                     print(f"WARNING: Could not find a new product for campaign {campaign['name']}")
                     # DO NOT allow reposting - skip this posting cycle instead
                     # The product discovery cycle should refill the queue
-                    error_msg = f"No new products available for campaign {campaign['name']}. Queue may be empty - waiting for product discovery cycle."
+                    error_msg = f"Не удалось найти новый продукт для кампании '{campaign['name']}'. Очередь может быть пуста - ожидание цикла обнаружения продуктов."
                     print(f"⏭️  {error_msg}")
                     # Optionally notify admin if queue is consistently empty
                     queue_size = await campaign_manager_instance.get_queue_size(campaign_id)
                     if queue_size == 0:
-                        await self._notify_admin(f"⚠️  Campaign '{campaign['name']}' queue is empty. Product discovery cycle should refill it soon.")
+                        await self._notify_user(
+                            f"⚠️ Очередь кампании '{campaign['name']}' пуста. Цикл обнаружения продуктов скоро ее пополнит.",
+                            user_id=user_id
+                        )
                     return  # Skip posting instead of reposting
 
             if not product_data:
-                error_msg = f"No product data available for campaign {campaign['name']}"
+                error_msg = f"Нет данных о продукте для кампании {campaign['name']}"
                 print(f"❌ {error_msg}")
-                await self._notify_admin(f"🚨 Error: {error_msg}")
+                await self._notify_user(f"🚨 Ошибка: {error_msg}", user_id=user_id)
                 return
 
         except Exception as e:
-            error_msg = f"Product selection failed for campaign {campaign['name']}: {str(e)}"
+            error_msg = f"Выбор продукта для кампании {campaign['name']} не удался: {str(e)}"
             print(f"❌ {error_msg}")
-            await self._notify_admin(f"🚨 Error: {error_msg}")
+            await self._notify_user(f"🚨 Ошибка: {error_msg}", user_id=user_id)
             return
 
         # --- Content Generation with Templates ---
@@ -364,9 +378,9 @@ class PostManager:
                 }
 
         except Exception as e:
-            error_msg = f"Content generation failed for campaign {campaign['name']}: {str(e)}"
+            error_msg = f"Генерация контента для кампании {campaign['name']} не удалась: {str(e)}"
             print(f"❌ {error_msg}")
-            await self._notify_admin(f"🚨 Error: {error_msg}")
+            await self._notify_user(f"🚨 Ошибка: {error_msg}", user_id=user_id)
             return
 
         # --- UTM Link Generation ---
@@ -425,9 +439,9 @@ class PostManager:
                 print(f"✅ Posted to {channel_name} for campaign {campaign['name']}")
 
             except Exception as e:
-                error_msg = f"❌ Failed to post to {channel_name} for campaign '{campaign['name']}': {e}"
+                error_msg = f"❌ Не удалось опубликовать в {channel_name} для кампании '{campaign['name']}': {e}"
                 print(error_msg)
-                await self._notify_admin(f"🚨 Ошибка постинга: {error_msg}")
+                await self._notify_user(f"🚨 Ошибка постинга: {error_msg}", user_id=user_id)
 
         # --- Statistics Logging ---
         try:
@@ -476,6 +490,7 @@ class PostManager:
         campaign_id = campaign.get('id')
         params = campaign.get('params', {})
         language = params.get('language', 'en')
+        user_id = params.get('created_by_user_id')
 
         # Use enriched product data directly - content generator now handles multiple formats
         formatted_product_data = {
@@ -532,9 +547,9 @@ class PostManager:
                 }
 
         except Exception as e:
-            error_msg = f"Content generation failed for queued product {product_data.get('asin')}: {str(e)}"
+            error_msg = f"Генерация контента для продукта из очереди {product_data.get('asin')} не удалась: {str(e)}"
             print(f"❌ {error_msg}")
-            await self._notify_admin(f"🚨 Error: {error_msg}")
+            await self._notify_user(f"🚨 Ошибка: {error_msg}", user_id=user_id)
             return
 
         # --- UTM Link Generation ---
@@ -593,9 +608,9 @@ class PostManager:
                 print(f"✅ Posted queued product to {channel_name} for campaign {campaign['name']}")
 
             except Exception as e:
-                error_msg = f"❌ Failed to post queued product to {channel_name} for campaign '{campaign['name']}': {e}"
+                error_msg = f"❌ Не удалось опубликовать продукт из очереди в {channel_name} для кампании '{campaign['name']}': {e}"
                 print(error_msg)
-                await self._notify_admin(f"🚨 Ошибка постинга (очередь): {error_msg}")
+                await self._notify_user(f"🚨 Ошибка постинга (очередь): {error_msg}", user_id=user_id)
 
         # --- Statistics Logging ---
         try:

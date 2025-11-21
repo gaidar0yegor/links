@@ -361,8 +361,6 @@ class AmazonPAAPIClient:
                     # Apply additional filters
                     if filters.get("MinPrice"):
                         search_items_request.min_price = int(filters["MinPrice"] * 100)  # Convert to cents
-                    if filters.get("MinSavingPercent"):
-                        search_items_request.min_saving_percent = filters["MinSavingPercent"]
 
                     response = self.api_client.search_items(search_items_request)
 
@@ -730,8 +728,9 @@ class AmazonPAAPIClient:
             return self._get_fallback_mock_data(keywords, min_rating)
 
     async def search_items_enhanced(self, browse_node_ids: List[str], min_rating: float = 0.0,
-                                   min_price: Optional[float] = None, min_saving_percent: Optional[int] = None,
-                                   fulfilled_by_amazon: Optional[bool] = None, max_results: int = 10) -> List[Dict[str, Any]]:
+                                   min_price: Optional[float] = None,
+                                   fulfilled_by_amazon: Optional[bool] = None, max_results: int = 10,
+                                   max_sales_rank: Optional[int] = None) -> List[Dict[str, Any]]:
         """
         Enhanced search that returns multiple products with sales rank information.
         Uses GetItems API to enrich data with ratings, reviews, and sales rank.
@@ -741,9 +740,9 @@ class AmazonPAAPIClient:
             browse_node_ids: List of Amazon browse node IDs to search within
             min_rating: Minimum customer rating (0.0-5.0)
             min_price: Minimum price filter
-            min_saving_percent: Minimum saving percentage
             fulfilled_by_amazon: Whether to filter for FBA products
             max_results: Maximum number of products to return
+            max_sales_rank: Maximum sales rank for filtering
 
         Returns:
             List of product dictionaries with enhanced data
@@ -781,9 +780,6 @@ class AmazonPAAPIClient:
                     if min_price:
                         search_request.min_price = int(min_price * 100)  # Convert to cents
 
-                    if min_saving_percent:
-                        search_request.min_saving_percent = min_saving_percent
-
                     # Execute search
                     response = self.api_client.search_items(search_request)
 
@@ -818,16 +814,21 @@ class AmazonPAAPIClient:
             enriched_products = await self._enrich_products_batch(candidate_asins)
 
             # Phase 3: Filter and return products that meet criteria
+            print(f"DEBUG: Starting final filtering for {len(enriched_products)} products...")
             filtered_products = []
             for product in enriched_products:
+                asin = product.get('asin', 'N/A')
+
                 # Apply rating filter
                 rating = product.get('rating')
-                if min_rating and rating and rating < min_rating:
+                if min_rating and (rating is None or rating < min_rating):
+                    print(f"DEBUG: Skipping product {asin} - rating '{rating}' is below minimum '{min_rating}'")
                     continue
 
-                # Apply sales rank filter (if available)
+                # Apply sales rank filter
                 sales_rank = product.get('sales_rank')
-                if sales_rank and sales_rank > 100000:  # Skip very low-ranked products
+                if max_sales_rank and (sales_rank is None or sales_rank > max_sales_rank):
+                    print(f"DEBUG: Skipping product {asin} - sales rank '{sales_rank}' is above maximum '{max_sales_rank}'")
                     continue
 
                 filtered_products.append(product)
@@ -979,7 +980,7 @@ class AmazonPAAPIClient:
                         product_data['description'] = ' '.join(features[:3]) if features else ''
                         print(f"DEBUG: Extracted {len(features)} features from API for ASIN {asin}")
 
-            # Extract price
+            # Extract price and discount
             if hasattr(item, 'offers') and item.offers:
                 if hasattr(item.offers, 'listings') and item.offers.listings:
                     for listing in item.offers.listings:
@@ -989,6 +990,9 @@ class AmazonPAAPIClient:
                             if amount is not None:
                                 product_data['price'] = float(amount)
                                 product_data['currency'] = currency
+                        
+                        # Assuming we only care about the first listing with a price
+                        if product_data['price'] is not None:
                             break
 
             # Extract rating and review count (available in GetItems)
