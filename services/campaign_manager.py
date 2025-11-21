@@ -60,13 +60,17 @@ class CampaignManager:
 
     async def save_new_campaign(self, campaign_data: dict) -> int:
         """Сохраняет новую кампанию в БД и возвращает ее ID."""
-        # Убираем временные ключи и формируем JSONB для params
+        # Extract values for separate columns
         name = campaign_data.pop('name')
-        # Устанавливаем начальный статус "timingless", так как тайминги еще не проставлены
-        status = 'timingless'
+        created_by_user_id = campaign_data.pop('created_by_user_id', None)
+        status = 'timingless'  # Initial status - timings not set yet
 
-        # Очищаем данные от ключей, которые не нужны в JSONB (например, 'ratings', 'channels')
-        # и оставляем только агрегированные параметры:
+        # Extract additional parameters for separate columns
+        min_review_count = campaign_data.pop('min_review_count', 0)
+        posting_frequency = campaign_data.pop('posting_frequency', 0)
+        track_id = campaign_data.pop('track_id', None)
+
+        # Clean data for JSONB params (remove keys that are stored separately)
         params_json = {
             'channels': campaign_data.get('channels', []),
             'categories': campaign_data.get('categories', []),
@@ -74,27 +78,55 @@ class CampaignManager:
             'min_rating': campaign_data.get('rating'),
             'language': campaign_data.get('language'),
             'browse_node_ids': campaign_data.get('browse_node_ids', []),
-            # Add new filters
+            # Keep legacy filters for backward compatibility
             'min_price': campaign_data.get('min_price'),
             'min_saving_percent': campaign_data.get('min_saving_percent'),
             'fulfilled_by_amazon': campaign_data.get('fulfilled_by_amazon'),
-            # Simplified quality control: only sales rank threshold
-            'max_sales_rank': campaign_data.get('max_sales_rank', 10000),  # Default 10,000
+            'max_sales_rank': campaign_data.get('max_sales_rank', 10000),
         }
 
         import json
+        # Updated query with new columns
         query = """
-        INSERT INTO campaigns (name, status, params)
-        VALUES ($1, $2, $3::jsonb)
+        INSERT INTO campaigns (
+            name, status, params, created_by_user_id,
+            min_review_count, posting_frequency, track_id
+        ) VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7)
         RETURNING id;
         """
         async with self.db_pool.acquire() as conn:
-            campaign_id = await conn.fetchval(query, name, status, json.dumps(params_json))
+            campaign_id = await conn.fetchval(
+                query, name, status, json.dumps(params_json),
+                created_by_user_id, min_review_count, posting_frequency, track_id
+            )
             return campaign_id
 
     async def get_campaign_details(self, campaign_id: int) -> Dict[str, Any] | None:
         """Получает полные детали кампании по ID."""
         query = "SELECT id, name, status, params FROM campaigns WHERE id = $1;"
+        async with self.db_pool.acquire() as conn:
+            record = await conn.fetchrow(query, campaign_id)
+            if record:
+                # Преобразуем record в словарь
+                campaign_dict = dict(record)
+                # Парсим JSON params если это строка
+                if isinstance(campaign_dict.get('params'), str):
+                    import json
+                    try:
+                        campaign_dict['params'] = json.loads(campaign_dict['params'])
+                    except json.JSONDecodeError:
+                        # Если не удается распарсить, оставляем как есть
+                        pass
+                return campaign_dict
+            return None
+
+    async def get_campaign_details_full(self, campaign_id: int) -> Dict[str, Any] | None:
+        """Получает полные детали кампании по ID, включая все поля."""
+        query = """
+        SELECT id, name, status, params, created_by_user_id, min_review_count,
+               posting_frequency, track_id
+        FROM campaigns WHERE id = $1;
+        """
         async with self.db_pool.acquire() as conn:
             record = await conn.fetchrow(query, campaign_id)
             if record:
@@ -611,6 +643,102 @@ class CampaignManager:
         async with self.db_pool.acquire() as conn:
             count = await conn.fetchval(query, campaign_id)
             return count or 0
+
+    async def populate_queue_for_campaign(self, campaign_id: int, limit: int = 20):
+        """
+        Immediately populate the product queue for a newly created campaign.
+        This addresses the issue where campaigns previously waited 6 hours.
+        """
+        try:
+            # Get campaign details
+            campaign = await self.get_campaign_details_full(campaign_id)
+            if not campaign:
+                print(f"❌ Campaign {campaign_id} not found for queue population")
+                return 0
+
+            # Check current queue size to avoid overpopulation
+            current_queue_size = await self.get_queue_size(campaign_id)
+            if current_queue_size >= limit:
+                print(f"✅ Campaign {campaign_id} already has {current_queue_size} products in queue")
+                return current_queue_size
+
+            print(f"🔄 Populating queue for campaign {campaign['name']} (ID: {campaign_id})")
+
+            # Import required services (local imports to avoid circular dependencies)
+            try:
+                from services.amazon_paapi_client import amazon_paapi_client
+            except ImportError:
+                print(f"⚠️  Amazon PA API client not available, skipping queue population")
+                return 0
+
+            params = campaign.get('params', {})
+            browse_node_ids = params.get('browse_node_ids', [])
+
+            if not browse_node_ids:
+                print(f"⚠️  No browse_node_ids for campaign {campaign_id}, skipping queue population")
+                return 0
+
+            # Search for products
+            search_results = await amazon_paapi_client.search_items_enhanced(
+                browse_node_ids=browse_node_ids,
+                min_rating=params.get('min_rating', 4.0),
+                min_price=params.get('min_price'),
+                min_saving_percent=params.get('min_saving_percent'),
+                fulfilled_by_amazon=params.get('fulfilled_by_amazon'),
+                max_sales_rank=params.get('max_sales_rank', 10000),
+                max_results=min(limit * 2, 50)  # Get more results to filter from
+            )
+
+            if not search_results:
+                print(f"❌ No products found for campaign {campaign_id}")
+                return 0
+
+            # Get already posted ASINs to avoid duplicates
+            min_review_count = campaign.get('min_review_count', 0)
+            posted_asins = await self.get_posted_asins(campaign_id, limit=5000)
+
+            queued_count = 0
+            for product in search_results:
+                # Stop if we've reached the desired queue size
+                if await self.get_queue_size(campaign_id) >= limit:
+                    break
+
+                asin = product.get('asin')
+                if not asin or asin in posted_asins:
+                    continue
+
+                # Apply review count filter (new feature)
+                review_count = product.get('review_count', 0)
+                if min_review_count > 0 and review_count < min_review_count:
+                    continue
+
+                # Prepare product data
+                product_data = {
+                    'asin': asin,
+                    'title': product.get('title', ''),
+                    'price': product.get('price'),
+                    'currency': product.get('currency', 'EUR'),
+                    'rating': product.get('rating'),
+                    'review_count': review_count,
+                    'sales_rank': product.get('sales_rank'),
+                    'image_url': product.get('image_url'),
+                    'affiliate_link': product.get('affiliate_link'),
+                    'browse_node_ids': browse_node_ids
+                }
+
+                try:
+                    await self.add_product_to_queue(campaign_id, product_data)
+                    queued_count += 1
+                    print(f"✅ Added {asin} to queue (rank: {product.get('sales_rank')}, reviews: {review_count})")
+                except Exception as e:
+                    print(f"❌ Failed to add {asin} to queue: {e}")
+
+            print(f"🎉 Populated queue for campaign {campaign_id} with {queued_count} products")
+            return queued_count
+
+        except Exception as e:
+            print(f"❌ Failed to populate queue for campaign {campaign_id}: {e}")
+            return 0
 
     async def cleanup_old_products(self, days: int = 30):
         """

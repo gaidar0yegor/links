@@ -76,11 +76,31 @@ class CampaignScheduler:
             print(f"⏰ Нет кампаний для запуска по расписанию. Принудительно запускаем все активные кампании")
             campaigns_to_run = active_campaigns
 
-        # 3. Запускаем все подходящие кампании (только если они еще не постили в этом временном окне)
+        # 3. Запускаем все подходящие кампании (с учетом частоты постинга)
         for selected_campaign in campaigns_to_run:
-            # Проверяем, не постили ли мы уже в этом временном окне
+            # Проверяем частоту постинга (posting frequency)
+            posting_frequency = selected_campaign.get('posting_frequency', 0)  # posts per hour
             last_post_time = selected_campaign.get('last_post_time')
-            if last_post_time:
+
+            if posting_frequency > 0 and last_post_time:
+                # Вычисляем минимальный интервал между постами в секундах
+                min_interval_seconds = (3600 / posting_frequency)  # seconds between posts
+
+                # Проверяем, прошло ли достаточно времени с последнего поста
+                time_since_last_post = (datetime.now() - last_post_time).total_seconds()
+
+                if time_since_last_post < min_interval_seconds:
+                    remaining_minutes = (min_interval_seconds - time_since_last_post) / 60
+                    print(f"⏰ Кампания '{selected_campaign['name']}' - частота {posting_frequency} постов/час. "
+                          f"Последний пост был {time_since_last_post:.0f} сек назад. "
+                          f"Следующий пост через {remaining_minutes:.1f} мин.")
+                    continue
+
+                print(f"✅ Кампания '{selected_campaign['name']}' - прошедшее время {time_since_last_post:.0f} сек >= "
+                      f"минимум {min_interval_seconds:.0f} сек. Разрешен пост.")
+
+            # Проверяем, не постили ли мы уже в этом временном окне (legacy check)
+            elif last_post_time:
                 # Если последний пост был в текущем временном окне, пропускаем
                 current_window_start = None
                 for timing in selected_campaign.get('timings', []):

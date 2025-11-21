@@ -222,6 +222,7 @@ class AmazonPAAPIClient:
                         GetItemsResource.ITEMINFO_TITLE,
                         GetItemsResource.OFFERS_LISTINGS_PRICE,
                         GetItemsResource.IMAGES_PRIMARY_LARGE,
+                        GetItemsResource.IMAGES_VARIANTS_LARGE,
                         GetItemsResource.CUSTOMERREVIEWS_COUNT,
                         GetItemsResource.CUSTOMERREVIEWS_STARRATING,
                         GetItemsResource.ITEMINFO_FEATURES,
@@ -868,10 +869,11 @@ class AmazonPAAPIClient:
                         GetItemsResource.ITEMINFO_TITLE,
                         GetItemsResource.OFFERS_LISTINGS_PRICE,
                         GetItemsResource.IMAGES_PRIMARY_LARGE,
+                        GetItemsResource.IMAGES_VARIANTS_LARGE,
                         GetItemsResource.CUSTOMERREVIEWS_COUNT,
                         GetItemsResource.CUSTOMERREVIEWS_STARRATING,
-                        GetItemsResource.BROWSENODEINFO_WEBSITESALESRANK,
                         GetItemsResource.ITEMINFO_FEATURES,
+                        GetItemsResource.BROWSENODEINFO_WEBSITESALESRANK,
                         GetItemsResource.OFFERS_LISTINGS_SAVINGBASIS,
                     ]
                 )
@@ -959,10 +961,10 @@ class AmazonPAAPIClient:
                 'rating': None,
                 'review_count': None,
                 'sales_rank': None,
-                'image_url': '',
+                'image_urls': [],
                 'affiliate_link': getattr(item, 'detail_page_url', ''),
                 'features': [],
-                'description': ''
+                'description': '',
             }
 
             # Extract title
@@ -1012,15 +1014,27 @@ class AmazonPAAPIClient:
                     elif hasattr(sales_rank_data, 'sales_rank'):
                         product_data['sales_rank'] = sales_rank_data.sales_rank
 
-            # Extract image
+            # --- Image Extraction ---
+            image_urls = []
             if hasattr(item, 'images') and item.images:
-                if hasattr(item.images, 'primary') and item.images.primary:
-                    if hasattr(item.images.primary, 'large') and item.images.primary.large:
-                        product_data['image_url'] = getattr(item.images.primary.large, 'url', '')
+                # Add primary image first
+                if hasattr(item.images, 'primary') and item.images.primary and hasattr(item.images.primary, 'large') and item.images.primary.large:
+                    primary_url = item.images.primary.large.url
+                    if primary_url:
+                        image_urls.append(primary_url)
+                
+                # Add variant images, up to the limit
+                if hasattr(item.images, 'variants') and item.images.variants:
+                    for variant in item.images.variants:
+                        if len(image_urls) >= 3:
+                            break
+                        if hasattr(variant, 'large') and variant.large:
+                            variant_url = variant.large.url
+                            if variant_url and variant_url not in image_urls:
+                                image_urls.append(variant_url)
 
-            # Debug logging
-            print(f"DEBUG: Enriched product {asin}: rating={product_data['rating']}, reviews={product_data['review_count']}, sales_rank={product_data['sales_rank']}, price={product_data['price']}")
-
+            product_data['image_urls'] = image_urls[:3] # Ensure we don't exceed 3
+            
             return product_data
 
         except Exception as e:

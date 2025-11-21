@@ -1,6 +1,6 @@
 # services/post_manager.py
 import requests
-from aiogram.types import BufferedInputFile
+from aiogram.types import BufferedInputFile, InputMediaPhoto
 from PIL import Image, ImageDraw, ImageFont # Для водяных знаков
 from io import BytesIO
 from services.sheets_api import sheets_api
@@ -20,9 +20,21 @@ class PostManager:
             print(f"⚠️  Не удалось инициализировать LLM клиент: {e}. Рерайт будет недоступен.")
             self.llm_client = None
 
-    async def _notify_user(self, message: str, user_id: Optional[int] = None):
+    async def _notify_user(self, message: str, user_id: Optional[int] = None, campaign_id: Optional[int] = None):
         """Отправляет уведомление целевому пользователю или администратору в качестве фолбэка."""
         target_id = user_id
+
+        # If no user_id provided, try to get campaign creator
+        if not target_id and campaign_id:
+            try:
+                from services.campaign_manager import get_campaign_manager
+                campaign_mgr = get_campaign_manager()
+                if campaign_mgr:
+                    campaign_details = await campaign_mgr.get_campaign_details_full(campaign_id)
+                    if campaign_details and campaign_details.get('created_by_user_id'):
+                        target_id = campaign_details['created_by_user_id']
+            except Exception as e:
+                print(f"⚠️  Не удалось получить создателя кампании {campaign_id}: {e}")
 
         if not target_id:
             try:
@@ -258,7 +270,7 @@ class PostManager:
                                 product_data = {
                                     'ASIN': selected_product.get('asin', ''),
                                     'Title': selected_product.get('title', ''),
-                                    'ImageURL': selected_product.get('image_url', ''),
+                                    'ImageURLs': selected_product.get('image_urls', []),
                                     'AffiliateLink': selected_product.get('affiliate_link', ''),
                                     'Price': f"€{selected_product.get('price', 0):.2f}" if selected_product.get('price') else '',
                                     'Rating': str(selected_product.get('rating', '')),
@@ -347,7 +359,7 @@ class PostManager:
                     'text': content_result.get('content', ''),
                     'hashtags': content_result.get('hashtags', '#Product #Affiliate'),
                     'product_link': product_data.get('AffiliateLink', ''),
-                    'product_image': product_data.get('ImageURL', '')
+                    'product_images': product_data.get('ImageURLs', [])
                 }
 
             if not content_result:
@@ -374,7 +386,7 @@ class PostManager:
                     'text': '\n'.join(text_parts),
                     'hashtags': '#Deal #Product #Affiliate',
                     'product_link': product_data.get('AffiliateLink', ''),
-                    'product_image': product_data.get('ImageURL', '')
+                    'product_images': product_data.get('ImageURLs', [])
                 }
 
         except Exception as e:
@@ -383,11 +395,17 @@ class PostManager:
             await self._notify_user(f"🚨 Ошибка: {error_msg}", user_id=user_id)
             return
 
-        # --- UTM Link Generation ---
+        # --- UTM Link Generation with Track ID ---
         affiliate_link = content_result.get('product_link') or product_data.get('AffiliateLink', '')
         if affiliate_link:
             utm_marks = sheets_api.get_utm_marks()
             utm_params = []
+
+            # Add campaign-specific track ID if available
+            campaign_track_id = campaign.get('track_id')
+            if campaign_track_id:
+                utm_params.append(f"tag={campaign_track_id}")
+                print(f"✅ Added campaign Track ID: {campaign_track_id}")
 
             for param, value in utm_marks.items():
                 utm_params.append(f"{param}={value}")
@@ -413,28 +431,46 @@ class PostManager:
         if len(text_content) > 1024:
             text_content = text_content[:1020] + "..."
 
-        image_url = content_result.get('product_image') or product_data.get('ImageURL', '')
+        image_urls = content_result.get('product_images') or product_data.get('ImageURLs', [])
         channels = params.get('channels', [])
         successful_posts = 0
 
         for channel_name in channels:
-            # Create watermark with channel name for each channel
-            image_stream = self._add_watermark(image_url, channel_name) if image_url else None
             try:
-                if image_stream:
-                    image_stream.seek(0)
-                    await self.bot.send_photo(
-                        chat_id=channel_name,
-                        photo=BufferedInputFile(image_stream.read(), filename="photo.jpg"),
-                        caption=text_content,
-                        parse_mode='Markdown'
-                    )
-                else:
+                if not image_urls:
+                    # No images, send text only
                     await self.bot.send_message(
                         chat_id=channel_name,
                         text=text_content,
                         parse_mode='Markdown'
                     )
+                elif len(image_urls) == 1:
+                    # Single image, use send_photo
+                    image_stream = self._add_watermark(image_urls[0], channel_name)
+                    if image_stream:
+                        image_stream.seek(0)
+                        await self.bot.send_photo(
+                            chat_id=channel_name,
+                            photo=BufferedInputFile(image_stream.read(), filename="photo.jpg"),
+                            caption=text_content,
+                            parse_mode='Markdown'
+                        )
+                else:
+                    # Multiple images, use send_media_group
+                    media_group = []
+                    for i, url in enumerate(image_urls):
+                        image_stream = self._add_watermark(url, channel_name)
+                        if image_stream:
+                            image_stream.seek(0)
+                            photo_file = BufferedInputFile(image_stream.read(), filename=f"photo{i}.jpg")
+                            # Add caption only to the first photo
+                            caption = text_content if i == 0 else None
+                            parse_mode = 'Markdown' if i == 0 else None
+                            media_group.append(InputMediaPhoto(media=photo_file, caption=caption, parse_mode=parse_mode))
+                    
+                    if media_group:
+                        await self.bot.send_media_group(chat_id=channel_name, media=media_group)
+
                 successful_posts += 1
                 print(f"✅ Posted to {channel_name} for campaign {campaign['name']}")
 
@@ -496,7 +532,7 @@ class PostManager:
         formatted_product_data = {
             'asin': product_data.get('asin', ''),
             'title': product_data.get('title', ''),
-            'image_url': product_data.get('image_url', ''),
+            'image_urls': product_data.get('image_urls', []),
             'affiliate_link': product_data.get('affiliate_link', ''),
             'price': product_data.get('price'),  # Keep as numeric for better formatting
             'rating': product_data.get('rating'),  # Keep as numeric for better formatting
@@ -515,8 +551,8 @@ class PostManager:
                 content_result = {
                     'text': content_result.get('content', ''),
                     'hashtags': content_result.get('hashtags', '#Product #Affiliate'),
-                    'product_link': formatted_product_data.get('AffiliateLink', ''),
-                    'product_image': formatted_product_data.get('ImageURL', '')
+                    'product_link': formatted_product_data.get('affiliate_link', ''),
+                    'product_images': formatted_product_data.get('image_urls', [])
                 }
 
             if not content_result:
@@ -542,8 +578,8 @@ class PostManager:
                 content_result = {
                     'text': '\n'.join(text_parts),
                     'hashtags': '#Deal #Product #Affiliate',
-                    'product_link': formatted_product_data.get('AffiliateLink', ''),
-                    'product_image': formatted_product_data.get('ImageURL', '')
+                    'product_link': formatted_product_data.get('affiliate_link', ''),
+                    'product_images': formatted_product_data.get('image_urls', [])
                 }
 
         except Exception as e:
@@ -552,11 +588,17 @@ class PostManager:
             await self._notify_user(f"🚨 Ошибка: {error_msg}", user_id=user_id)
             return
 
-        # --- UTM Link Generation ---
-        affiliate_link = content_result.get('product_link') or formatted_product_data.get('AffiliateLink', '')
+        # --- UTM Link Generation with Track ID ---
+        affiliate_link = content_result.get('product_link') or formatted_product_data.get('affiliate_link', '')
         if affiliate_link:
             utm_marks = sheets_api.get_utm_marks()
             utm_params = []
+
+            # Add campaign-specific track ID if available
+            campaign_track_id = campaign.get('track_id')
+            if campaign_track_id:
+                utm_params.append(f"tag={campaign_track_id}")
+                print(f"✅ Added campaign Track ID: {campaign_track_id}")
 
             for param, value in utm_marks.items():
                 utm_params.append(f"{param}={value}")
@@ -582,28 +624,45 @@ class PostManager:
         if len(text_content) > 1024:
             text_content = text_content[:1020] + "..."
 
-        image_url = content_result.get('product_image') or formatted_product_data.get('ImageURL', '')
+        image_urls = content_result.get('product_images') or formatted_product_data.get('image_urls', [])
         channels = params.get('channels', [])
         successful_posts = 0
 
         for channel_name in channels:
-            # Create watermark with channel name for each channel
-            image_stream = self._add_watermark(image_url, channel_name) if image_url else None
             try:
-                if image_stream:
-                    image_stream.seek(0)
-                    await self.bot.send_photo(
-                        chat_id=channel_name,
-                        photo=BufferedInputFile(image_stream.read(), filename="photo.jpg"),
-                        caption=text_content,
-                        parse_mode='Markdown'
-                    )
-                else:
+                if not image_urls:
+                    # No images, send text only
                     await self.bot.send_message(
                         chat_id=channel_name,
                         text=text_content,
                         parse_mode='Markdown'
                     )
+                elif len(image_urls) == 1:
+                    # Single image, use send_photo
+                    image_stream = self._add_watermark(image_urls[0], channel_name)
+                    if image_stream:
+                        image_stream.seek(0)
+                        await self.bot.send_photo(
+                            chat_id=channel_name,
+                            photo=BufferedInputFile(image_stream.read(), filename="photo.jpg"),
+                            caption=text_content,
+                            parse_mode='Markdown'
+                        )
+                else:
+                    # Multiple images, use send_media_group
+                    media_group = []
+                    for i, url in enumerate(image_urls):
+                        image_stream = self._add_watermark(url, channel_name)
+                        if image_stream:
+                            image_stream.seek(0)
+                            photo_file = BufferedInputFile(image_stream.read(), filename=f"photo{i}.jpg")
+                            caption = text_content if i == 0 else None
+                            parse_mode = 'Markdown' if i == 0 else None
+                            media_group.append(InputMediaPhoto(media=photo_file, caption=caption, parse_mode=parse_mode))
+                    
+                    if media_group:
+                        await self.bot.send_media_group(chat_id=channel_name, media=media_group)
+
                 successful_posts += 1
                 print(f"✅ Posted queued product to {channel_name} for campaign {campaign['name']}")
 

@@ -5,6 +5,33 @@
 DELETE FROM campaign_timings WHERE campaign_id IN (SELECT id FROM campaigns WHERE name LIKE 'test_%');
 DELETE FROM campaigns WHERE name LIKE 'test_%';
 
+-- Add missing columns for enhanced functionality (if not exists)
+DO $$ BEGIN
+    -- Add created_by_user_id column for admin notifications
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                   WHERE table_name='campaigns' AND column_name='created_by_user_id') THEN
+        ALTER TABLE campaigns ADD COLUMN created_by_user_id BIGINT;
+    END IF;
+
+    -- Add review filter columns
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                   WHERE table_name='campaigns' AND column_name='min_review_count') THEN
+        ALTER TABLE campaigns ADD COLUMN min_review_count INTEGER DEFAULT 0;
+    END IF;
+
+    -- Add posting frequency column
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                   WHERE table_name='campaigns' AND column_name='posting_frequency') THEN
+        ALTER TABLE campaigns ADD COLUMN posting_frequency INTEGER DEFAULT 0; -- 0 = continuous
+    END IF;
+
+    -- Add track_id column for campaign-specific tracking
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                   WHERE table_name='campaigns' AND column_name='track_id') THEN
+        ALTER TABLE campaigns ADD COLUMN track_id VARCHAR(100);
+    END IF;
+END $$;
+
 -- ITALIAN CHANNEL CAMPAIGNS (@CheapAmazon3332234)
 -- Campaign 1: Electronics (High quality, low sales rank)
 INSERT INTO campaigns (name, status, params) VALUES (

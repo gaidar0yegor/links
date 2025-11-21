@@ -111,12 +111,14 @@ async def start_new_campaign(callback: CallbackQuery, state: FSMContext):
     print(f"🔥 DEBUG: start_new_campaign called with data: {callback.data}")
 
     await state.set_state(CampaignStates.campaign_new_select_channel)
-    # Инициализируем данные кампании в FSM, добавляем ID создателя
+    # Инициализируем данные кампании в FSM, добавляем ID создателя и новые параметры
     await state.update_data(new_campaign={
         'created_by_user_id': callback.from_user.id,
         'channels': [],
         'categories': [],
-        # ... (остальные параметры)
+        'posting_frequency': 0,  'pDefault:icontinuouscpostsDefault: continuous posts
+        'min_review_count': 0,   # Default: no review filter  'min_review_count': 0,   # Default: no review filter
+        'track_id': None,        # Will be set later        'track_id': None,        # Will be set later
     })
 
     # 1. Загрузка опций
@@ -408,56 +410,207 @@ async def select_fba(callback: CallbackQuery, state: FSMContext):
     new_campaign['fulfilled_by_amazon'] = fba_status
     await state.update_data(new_campaign=new_campaign)
 
-    await state.set_state(CampaignStates.campaign_new_input_max_sales_rank)
+    await state.set_state(CampaignStates.campaign_new_select_sales_rank)
+
+    # Sales rank quality options (1-5 buttons)
+    sales_rank_options = [
+        ("🏆 Ранг 1: 1-250 (Элитные топ товары)", "250"),
+        ("🥈 Ранг 2: 251-500 (Очень популярные)", "500"),
+        ("🥉 Ранг 3: 501-1000 (Популярные)", "1000"),
+        ("⭐ Ранг 4: 1001-2000 (Хорошие)", "2000"),
+        ("📈 Ранг 5: 2000+ (Расширенный выбор)", "100000")
+    ]
 
     await callback.message.edit_text(
-        "<b>ШАГ 7: Максимальный Sales Rank</b>\n\n"
-        "🎯 <b>Упрощенная система качества</b>\n\n"
-        "Введите максимальный Sales Rank для товаров (рекомендуется: 10000).\n"
-        "Чем меньше число, тем лучше продаются товары.\n\n"
-        "Примеры:\n"
-        "• `10000` - товары из топ-10000 продаж\n"
-        "• `5000` - более качественные товары\n"
-        "• `50000` - более широкий выбор\n\n"
-        "Отправьте число или `0` для значения по умолчанию (10000):",
-        parse_mode="HTML"
+        "<b>🎯 ШАГ 7: Качество товаров - Sales Rank</b>\n\n"
+        "⭐ <b>Выберите уровень качества товаров:</b>\n\n"
+        "Чем меньше число Sales Rank, тем лучше продаются товары на Amazon.\n"
+        "Рекомендуем Ранг 3 или 4 для оптимального баланса качества и выбора.",
+        parse_mode="HTML",
+        reply_markup=get_multiselect_keyboard(
+            options=sales_rank_options,
+            selected_values=[],
+            done_callback="campaign_done_sales_rank",
+            back_callback="campaign_done_fba"  # Go back to FBA selection
+        )
     )
     await callback.answer()
 
 
-@router.message(CampaignStates.campaign_new_input_max_sales_rank, F.text)
-async def input_max_sales_rank(message: Message, state: FSMContext):
-    """Обрабатывает ввод максимального Sales Rank и переходит к Шагу 8: Язык."""
-    try:
-        max_rank = int(message.text.strip())
-        if max_rank < 0:
-            raise ValueError("Sales rank cannot be negative")
+@router.callback_query(F.data == "campaign_done_sales_rank", CampaignStates.campaign_new_select_sales_rank)
+async def done_select_sales_rank(callback: CallbackQuery, state: FSMContext):
+    """Обрабатывает завершение выбора Sales Rank и переходит к следующему шагу."""
+    data = await state.get_data()
+    selected_ranks = data['new_campaign'].get('sales_ranks', [])
 
-        # Use default if 0 is entered
-        if max_rank == 0:
-            max_rank = 10000
+    if not selected_ranks:
+        await callback.answer("⚠️ Выберите хотя бы один уровень качества товаров.", show_alert=True)
+        return
 
-        data = await state.get_data()
-        new_campaign = data['new_campaign']
-        new_campaign['max_sales_rank'] = max_rank
-        await state.update_data(new_campaign=new_campaign)
+    # Take the lowest rank (best quality) as the threshold
+    max_sales_rank = min(int(rank) for rank in selected_ranks)
+    new_campaign = data['new_campaign']
+    new_campaign['max_sales_rank'] = max_sales_rank
+    await state.update_data(new_campaign=new_campaign)
 
-        await state.set_state(CampaignStates.campaign_new_select_language)
+    # Map rank to readable description for logging
+    rank_descriptions = {
+        250: "Ранг 1 (1-250)",
+        500: "Ранг 2 (251-500)",
+        1000: "Ранг 3 (501-1000)",
+        2000: "Ранг 4 (1001-2000)",
+        100000: "Ранг 5 (2000+)"
+    }
+    selected_description = rank_descriptions.get(max_sales_rank, f"Кастомный ({max_sales_rank})")
 
-        language_options = await get_options_from_gsheets("languages")
-        await message.answer(
-            "<b>ШАГ 8: Выбор языка объявлений</b>\n\nВыберите язык:",
-            parse_mode="HTML",
-            reply_markup=get_multiselect_keyboard(
-                options=language_options,
-                selected_values=[],
-                done_callback="campaign_done_language",
-                back_callback="campaign_done_rating"  # Allows going back to rating
-            )
+    await state.set_state(CampaignStates.campaign_new_select_posting_frequency)
+
+    # Posting frequency options (posts per hour)
+    frequency_options = [
+        ("🐌 0.5 постов/час (очень редко)", "0.5"),
+        ("🐢 1 пост/час", "1"),
+        ("🚶 2 поста/час", "2"),
+        ("🏃 3 поста/час", "3"),
+        ("🚀 4 поста/час (активно)", "4"),
+        ("⚡ 6 постов/час (очень активно)", "6"),
+        ("🔥 12 постов/час (максимум)", "12")
+    ]
+
+    await callback.message.edit_text(
+        f"<b>ШАГ 8: Частота постинга</b>\n\n"
+        f"Текущий уровень качества: <b>{selected_description}</b>\n\n"
+        "<b>Как часто публиковать товары?</b>\n\n"
+        "Чем выше частота, тем активнее будет кампания.\n"
+        "Рекомендуем 2-4 поста в час для оптимальной видимости.\n\n"
+        "Выберите желаемую частоту постинга:",
+        parse_mode="HTML",
+        reply_markup=get_multiselect_keyboard(
+            options=frequency_options,
+            selected_values=[],
+            done_callback="campaign_done_posting_frequency",
+            back_callback="campaign_new_select_sales_rank"  # Go back to sales rank
         )
+    )
+    await callback.answer()
 
-    except ValueError:
-        await message.answer("❌ Введите корректное число (например, `10000` или `0` для значения по умолчанию).")
+
+@router.callback_query(F.data == "campaign_done_posting_frequency", CampaignStates.campaign_new_select_posting_frequency)
+async def done_select_posting_frequency(callback: CallbackQuery, state: FSMContext):
+    """Обрабатывает завершение выбора частоты постинга и переходит к следующему шагу."""
+    data = await state.get_data()
+    selected_frequencies = data['new_campaign'].get('posting_frequencies', [])
+
+    if not selected_frequencies:
+        await callback.answer("⚠️ Выберите хотя бы один уровень частоты постинга.", show_alert=True)
+        return
+
+    # Take the highest frequency (most active) as the target frequency
+    posting_frequency = max(float(freq) for freq in selected_frequencies)
+    new_campaign = data['new_campaign']
+    new_campaign['posting_frequency'] = posting_frequency
+    await state.update_data(new_campaign=new_campaign)
+
+    # Map frequency to readable description for display
+    frequency_descriptions = {
+        0.5: "🐌 Очень редко (0.5 постов/час)",
+        1.0: "🐢 Редко (1 пост/час)",
+        2.0: "🚶 Умеренно (2 поста/час)",
+        3.0: "🏃 Активно (3 поста/час)",
+        4.0: "🚀 Очень активно (4 поста/час)",
+        6.0: "⚡ Максимально (6 постов/час)",
+        12.0: "🔥 Экстремально (12 постов/час)"
+    }
+    selected_description = frequency_descriptions.get(posting_frequency, f"{posting_frequency} постов/час")
+
+    await state.set_state(CampaignStates.campaign_new_input_track_id)
+
+    await callback.message.edit_text(
+        f"<b>ШАГ 9: Track ID для ссылок</b>\n\n"
+        f"Текущая частота: <b>{selected_description}</b>\n\n"
+        "<b>Необязательно:</b> Введите Track ID для отслеживания трафика.\n"
+        "Это будет добавлено к affiliate ссылкам для аналитики.\n\n"
+        "Примеры:\n"
+        "• <code>telegram_bot</code>\n"
+        "• <code>campaign_001</code>\n"
+        "• <code>electronics_deals</code>\n\n"
+        "Отправьте Track ID или <code>пропустить</code> для продолжения:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⏭️ Пропустить Track ID", callback_data="skip_track_id")],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="campaign_new_select_posting_frequency")]
+        ])
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "skip_track_id", CampaignStates.campaign_new_input_track_id)
+async def skip_track_id(callback: CallbackQuery, state: FSMContext):
+    """Обрабатывает пропуск ввода Track ID."""
+    data = await state.get_data()
+    new_campaign = data['new_campaign']
+    new_campaign['track_id'] = None  # Explicitly set to None for skipped
+    await state.update_data(new_campaign=new_campaign)
+
+    await callback.answer("✅ Track ID пропущен.")
+
+    await state.set_state(CampaignStates.campaign_new_select_language)
+
+    language_options = await get_options_from_gsheets("languages")
+    await callback.message.edit_text(
+        "<b>ШАГ 10: Выбор языка объявлений</b>\n\n"
+        "Track ID: <b>Не задан</b>\n\n"
+        "Выберите язык объявлений:",
+        parse_mode="HTML",
+        reply_markup=get_multiselect_keyboard(
+            options=language_options,
+            selected_values=[],
+            done_callback="campaign_done_language",
+            back_callback="campaign_new_select_posting_frequency"
+        )
+    )
+
+
+@router.message(CampaignStates.campaign_new_input_track_id, F.text)
+async def input_track_id(message: Message, state: FSMContext):
+    """Обрабатывает ввод Track ID."""
+    track_id_text = message.text.strip()
+
+    if not track_id_text:
+        await message.answer("⚠️ Track ID не может быть пустым. Введите корректный ID или нажмите 'Пропустить'.")
+        return
+
+    # Validate track ID format (alphanumeric, underscores, hyphens)
+    import re
+    if not re.match(r'^[a-zA-Z0-9_-]+$', track_id_text):
+        await message.answer("❌ Track ID может содержать только буквы, цифры, подчеркивания и дефисы.")
+        return
+
+    if len(track_id_text) > 50:
+        await message.answer("❌ Track ID не может быть длиннее 50 символов.")
+        return
+
+    data = await state.get_data()
+    new_campaign = data['new_campaign']
+    new_campaign['track_id'] = track_id_text
+    await state.update_data(new_campaign=new_campaign)
+
+    await message.answer(f"✅ Track ID установлен: <b>{track_id_text}</b>", parse_mode="HTML")
+
+    await state.set_state(CampaignStates.campaign_new_select_language)
+
+    language_options = await get_options_from_gsheets("languages")
+    await message.answer(
+        "<b>ШАГ 10: Выбор языка объявлений</b>\n\n"
+        f"Track ID: <b>{track_id_text}</b>\n\n"
+        "Выберите язык объявлений:",
+        parse_mode="HTML",
+        reply_markup=get_multiselect_keyboard(
+            options=language_options,
+            selected_values=[],
+            done_callback="campaign_done_language",
+            back_callback="campaign_new_select_posting_frequency"
+        )
+    )
 
 
 @router.callback_query(F.data == "campaign_done_language", CampaignStates.campaign_new_select_language)
@@ -472,7 +625,7 @@ async def done_select_language(callback: CallbackQuery, state: FSMContext):
 
     # Если мультивыбор был использован для языка, берем первый выбранный (основной)
     language = selected_languages[0]
-
+            done_callback="campaign_done_language",
     new_campaign = data['new_campaign']
     new_campaign['language'] = language
 
@@ -614,6 +767,66 @@ async def toggle_selection(callback: CallbackQuery, state: FSMContext):
                     back_callback="back_to_categories_from_subcategories"
                 )
             )
+        await callback.answer()
+        return
+    elif current_state == CampaignStates.campaign_new_select_sales_rank:
+        # Handle sales rank selection specially
+        selected_list = new_campaign.get('sales_ranks', [])
+        if value_to_toggle in selected_list:
+            selected_list.remove(value_to_toggle)
+        else:
+            selected_list.append(value_to_toggle)
+        new_campaign['sales_ranks'] = selected_list
+        await state.update_data(new_campaign=new_campaign)
+
+        # Redraw sales rank keyboard
+        sales_rank_options = [
+            ("🏆 Ранг 1: 1-250 (Элитные топ товары)", "250"),
+            ("🥈 Ранг 2: 251-500 (Очень популярные)", "500"),
+            ("🥉 Ранг 3: 501-1000 (Популярные)", "1000"),
+            ("⭐ Ранг 4: 1001-2000 (Хорошие)", "2000"),
+            ("📈 Ранг 5: 2000+ (Расширенный выбор)", "100000")
+        ]
+
+        await callback.message.edit_reply_markup(
+            reply_markup=get_multiselect_keyboard(
+                options=sales_rank_options,
+                selected_values=selected_list,
+                done_callback="campaign_done_sales_rank",
+                back_callback="campaign_done_fba"
+            )
+        )
+        await callback.answer()
+        return
+    elif current_state == CampaignStates.campaign_new_select_posting_frequency:
+        # Handle posting frequency selection specially
+        selected_list = new_campaign.get('posting_frequencies', [])
+        if value_to_toggle in selected_list:
+            selected_list.remove(value_to_toggle)
+        else:
+            selected_list.append(value_to_toggle)
+        new_campaign['posting_frequencies'] = selected_list
+        await state.update_data(new_campaign=new_campaign)
+
+        # Redraw posting frequency keyboard
+        frequency_options = [
+            ("🐌 0.5 постов/час (очень редко)", "0.5"),
+            ("🐢 1 пост/час", "1"),
+            ("🚶 2 поста/час", "2"),
+            ("🏃 3 поста/час", "3"),
+            ("🚀 4 поста/час (активно)", "4"),
+            ("⚡ 6 постов/час (очень активно)", "6"),
+            ("🔥 12 постов/час (максимум)", "12")
+        ]
+
+        await callback.message.edit_reply_markup(
+            reply_markup=get_multiselect_keyboard(
+                options=frequency_options,
+                selected_values=selected_list,
+                done_callback="campaign_done_posting_frequency",
+                back_callback="campaign_new_select_sales_rank"
+            )
+        )
         await callback.answer()
         return
     elif current_state == CampaignStates.campaign_new_select_rating:
@@ -868,6 +1081,15 @@ async def finalize_and_save_campaign(callback: CallbackQuery, state: FSMContext)
             return
 
         campaign_id = await campaign_mgr.save_new_campaign(campaign_data)
+
+        # Immediately populate the product queue on campaign creation
+        try:
+            populated_count = await campaign_mgr.populate_queue_for_campaign(campaign_id, limit=20)
+            if populated_count > 0:
+                print(f"✅ Immediately populated queue with {populated_count} products for campaign {campaign_id}")
+        except Exception as e:
+            print(f"⚠️  Failed to populate queue for campaign {campaign_id}: {e}")
+            # Don't fail campaign creation if queue population fails
 
         await callback.message.edit_text(
             f"🎉 Кампания <b>'{campaign_name}'</b> успешно создана с ID: {campaign_id}.\n"

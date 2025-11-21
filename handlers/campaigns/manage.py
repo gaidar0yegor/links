@@ -120,9 +120,9 @@ async def enter_campaign_edit_menu(callback: CallbackQuery, state: FSMContext):
         await callback.answer("❌ Invalid campaign ID", show_alert=True)
         return
 
-    # TODO: Получить полные данные кампании из БД
+    # Get full campaign details including all new parameters
     campaign_mgr = get_campaign_manager()
-    campaign = await campaign_mgr.get_campaign_details(campaign_id) if campaign_mgr else None
+    campaign = await campaign_mgr.get_campaign_details_full(campaign_id) if campaign_mgr else None
 
     if not campaign:
         await callback.answer("❌ Кампания не найдена.", show_alert=True)
@@ -133,15 +133,69 @@ async def enter_campaign_edit_menu(callback: CallbackQuery, state: FSMContext):
     # Сохраняем ID для последующих операций
     await state.set_data({'current_campaign_id': campaign_id})
 
-    # Формируем текст с деталями и текущим статусом
+    # Get queue size for display
+    queue_size = await campaign_mgr.get_queue_size(campaign_id) if campaign_mgr else 0
+
+    # Формируем обширный текст с ВСЕМИ параметрами кампании
     status_emoji = "🟢" if campaign['status'] == 'running' else ("🔴" if campaign['status'] == 'stopped' else "🟡")
 
+    params = campaign.get('params', {})
+
+    # Format sales rank display with descriptive ranges
+    max_rank = params.get('max_sales_rank', 10000)
+    rank_descriptions = {
+        250: "🏆 Ранг 1 (1-250): Элитные товары",
+        500: "🥈 Ранг 2 (251-500): Очень популярные",
+        1000: "🥉 Ранг 3 (501-1000): Популярные",
+        2000: "⭐ Ранг 4 (1001-2000): Хорошие",
+        100000: "📈 Ранг 5 (2000+): Расширенный выбор"}
+    sales_rank_display = rank_descriptions.get(max_rank, f"Кастомный ({max_rank})")
+
+    # Format FBA status
+    fba_status = params.get('fulfilled_by_amazon')
+    fba_display = {
+        True: "✅ Только Amazon",
+        False: "❌ Без Amazon",
+        None: "🔄 Неважно"
+    }.get(fba_status, "🔄 Неважно")
+
     text = (
-        f"<b>Управление кампанией: {campaign['name']}</b>\n\n"
-        f"Текущий статус: <b>{status_emoji} {campaign['status']}</b>\n"
-        f"Мин. рейтинг: {campaign['params'].get('min_rating', 'Не задан')}\n"
-        # TODO: Добавить отображение текущих таймингов
+        f"<b>🎯 Кампания: {campaign['name']}</b>\n"
+        f"📍 <b>Статус:</b> {status_emoji} {campaign['status']}\n"
+        f"📦 <b>Товары в очереди:</b> {queue_size}\n\n"
+
+        f"<b>📊 Параметры фильтрации:</b>\n"
+        f"⭐ <b>Мин. рейтинг:</b> {params.get('min_rating', 'Не задан')}\n"
+        f"💰 <b>Мин. цена:</b> {'€' + str(params.get('min_price')) if params.get('min_price') else 'Не задана'}\n"
+        f"📈 <b>Макс. рейтинг продаж:</b> {sales_rank_display}\n"
+        f"🚚 <b>FBA:</b> {fba_display}\n"
+        f"📝 <b>Мин. отзывы:</b> {campaign.get('min_review_count', 0)}\n\n"
+
+        f"<b>🎯 Цели и каналы:</b>\n"
+        f"📺 <b>Каналы:</b> {', '.join(params.get('channels', []))}\n"
+        f"🏷️ <b>Категории:</b> {', '.join(params.get('categories', []))}\n"
+        f"🌐 <b>Язык:</b> {params.get('language', 'Не задан').upper()}\n"
+        f"🔗 <b>Track ID:</b> {campaign.get('track_id', 'Не задан')}\n\n"
+
+        f"<b>⏱️ Настройки постинга:</b>\n"
+        f"⚡ <b>Частота:</b> {campaign.get('posting_frequency', 0)} постов/час\n"
     )
+
+    # Add timing information if available
+    timings = await campaign_mgr.get_timings(campaign_id) if campaign_mgr else []
+    if timings:
+        days_map = {0: "Пн", 1: "Вт", 2: "Ср", 3: "Чт", 4: "Пт", 5: "Сб", 6: "Вс"}
+        timing_strs = []
+        for timing in timings:
+            day_name = days_map.get(timing['day_of_week'], "?")
+            start = timing['start_time'].strftime("%H:%M") if hasattr(timing['start_time'], 'strftime') else str(timing['start_time'])
+            end = timing['end_time'].strftime("%H:%M") if hasattr(timing['end_time'], 'strftime') else str(timing['end_time'])
+            timing_strs.append(f"{day_name} {start}-{end}")
+        text += f"🕒 <b>Расписание:</b> {', '.join(timing_strs)}\n"
+    else:
+        text += "🕒 <b>Расписание:</b> Не настроено\n"
+
+    text += "\n<b>Выберите действие:</b>"
 
     await callback.message.edit_text(
         text,
