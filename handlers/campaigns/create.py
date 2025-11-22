@@ -13,13 +13,13 @@ router = Router()
 # --- Вспомогательные функции ---
 
 # Эта функция будет вызываться, чтобы получить данные для мультивыбора из GS
-async def get_options_from_gsheets(sheet_name: str) -> List[Tuple[str, str]]:
+async def get_options_from_gsheets(sheet_name: str, language: str = 'ru') -> List[Tuple[str, str]]:
     """Получает данные (Название, Значение/Callback) для кнопок."""
     if sheet_name == "categories":
         # Use new unified categories_subcategories table
-        categories = sheets_api.get_unique_categories()
-        # Возвращаем имя категории как значение для callback_data
-        return [(cat["name"], cat["name"]) for cat in categories]
+        categories = sheets_api.get_unique_categories(language)
+        # Возвращаем оригинальное имя категории (итальянское) для callback_data, чтобы сохранить совместимость
+        return [(cat["name"], cat["original_name"] if "original_name" in cat else cat["name"]) for cat in categories]
     elif sheet_name == "subcategories":
         # This will be handled dynamically based on selected categories
         return []
@@ -116,9 +116,9 @@ async def start_new_campaign(callback: CallbackQuery, state: FSMContext):
         'created_by_user_id': callback.from_user.id,
         'channels': [],
         'categories': [],
-        'posting_frequency': 0,  'pDefault:icontinuouscpostsDefault: continuous posts
-        'min_review_count': 0,   # Default: no review filter  'min_review_count': 0,   # Default: no review filter
-        'track_id': None,        # Will be set later        'track_id': None,        # Will be set later
+        'posting_frequency': 0,
+        'min_review_count': 0,   # Default: no review filter
+        'track_id': None,        # Will be set later
     })
 
     # 1. Загрузка опций
@@ -207,7 +207,7 @@ async def show_subcategories_for_category(callback: CallbackQuery, state: FSMCon
         return
 
     current_category = selected_categories[current_index]
-    subcategories = sheets_api.get_subcategories_for_category(current_category)
+    subcategories = sheets_api.get_subcategories_for_category(current_category, 'ru')
 
     if not subcategories:
         # No subcategories for this category, skip to next
@@ -625,7 +625,6 @@ async def done_select_language(callback: CallbackQuery, state: FSMContext):
 
     # Если мультивыбор был использован для языка, берем первый выбранный (основной)
     language = selected_languages[0]
-            done_callback="campaign_done_language",
     new_campaign = data['new_campaign']
     new_campaign['language'] = language
 
@@ -728,7 +727,7 @@ async def toggle_selection(callback: CallbackQuery, state: FSMContext):
         selected_categories = data['new_campaign']['categories']
         if current_index < len(selected_categories):
             current_category = selected_categories[current_index]
-            subcategories = sheets_api.get_subcategories_for_category(current_category)
+            subcategories = sheets_api.get_subcategories_for_category(current_category, 'ru')
             subcategories_data = data['new_campaign'].get('subcategories', {})
             selected_list = subcategories_data.get(current_category, [])
 

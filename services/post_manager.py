@@ -67,45 +67,74 @@ class PostManager:
         return "Rewrite the following text to make it engaging and persuasive and fit for a social media post."
 
     def _add_watermark(self, image_url: str, channel_name: str) -> BytesIO | None:
-        """Скачивает изображение, накладывает водяной знак с названием канала и возвращает BytesIO."""
+        """Скачивает изображение, накладывает профессиональный водяной знак с названием канала и возвращает BytesIO."""
         try:
-            # 1. Загрузка
+            # 1. Загрузка изображения
             response = requests.get(image_url, timeout=10)
             img = Image.open(BytesIO(response.content)).convert("RGBA")
 
-            # 2. Наложение текста (Улучшенная реализация с большим шрифтом)
-            txt = Image.new('RGBA', img.size, (255, 255, 255, 0))
-            draw = ImageDraw.Draw(txt)
+            # 2. Создание слоя для водяного знака
+            watermark_layer = Image.new('RGBA', img.size, (0, 0, 0, 0))
+            draw = ImageDraw.Draw(watermark_layer)
 
-            # Используем больший шрифт (масштабируемый по размеру изображения)
-            font_size = max(20, min(img.width, img.height) // 30)  # Минимум 20px, масштабируется
+            # 3. Настройка шрифта
+            font_size = max(24, min(img.width, img.height) // 25)  # Увеличен минимальный размер
             try:
                 font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size)
             except:
-                # Fallback to default if truetype not available
                 font = ImageFont.load_default()
 
-            # Позиция: нижний правый угол с отступом
+            # 4. Расчет размеров текста
             text_bbox = draw.textbbox((0, 0), channel_name, font=font)
             text_width = text_bbox[2] - text_bbox[0]
             text_height = text_bbox[3] - text_bbox[1]
 
-            text_x = img.width - text_width - 20
-            text_y = img.height - text_height - 20
+            # 5. Создание стильного фона для текста (полупрозрачный черный с закруглением)
+            padding = 16
+            bg_x1 = img.width - text_width - padding * 3
+            bg_y1 = img.height - text_height - padding * 2
+            bg_x2 = img.width - padding
+            bg_y2 = img.height - padding
 
-            # Полупрозрачный белый текст с черной обводкой для лучшей видимости
-            # Сначала рисуем черную обводку
+            # Рисуем закругленный прямоугольник с градиентом
+            from PIL import ImageDraw
+            draw.rounded_rectangle(
+                [(bg_x1, bg_y1), (bg_x2, bg_y2)],
+                radius=12,  # Закругленные углы
+                fill=(0, 0, 0, 140)  # Полупрозрачный черный фон
+            )
+
+            # Добавляем легкую тень/обводку для лучшей видимости
+            shadow_offset = 2
+            for offset_x, offset_y in [(-shadow_offset, -shadow_offset), (-shadow_offset, shadow_offset),
+                                     (shadow_offset, -shadow_offset), (shadow_offset, shadow_offset)]:
+                draw.text(
+                    (bg_x1 + padding + offset_x, bg_y1 + padding + offset_y),
+                    channel_name,
+                    fill=(0, 0, 0, 80),
+                    font=font
+                )
+
+            # 6. Рисуем основной текст белым цветом
+            text_x = bg_x1 + padding
+            text_y = bg_y1 + padding
+            draw.text((text_x, text_y), channel_name, fill=(255, 255, 255, 255), font=font)
+
+            # 7. Добавляем тонкий белый бордер для выделения
             for offset_x, offset_y in [(-1, -1), (-1, 1), (1, -1), (1, 1)]:
-                draw.text((text_x + offset_x, text_y + offset_y), channel_name, fill=(0, 0, 0, 180), font=font)
+                draw.text(
+                    (text_x + offset_x, text_y + offset_y),
+                    channel_name,
+                    fill=(255, 255, 255, 60),
+                    font=font
+                )
 
-            # Затем белый текст
-            draw.text((text_x, text_y), channel_name, fill=(255, 255, 255, 220), font=font)
+            # 8. Объединяем изображение с водяным знаком
+            combined = Image.alpha_composite(img, watermark_layer)
 
-            combined = Image.alpha_composite(img, txt)
-
-            # 3. Сохранение в BytesIO
+            # 9. Сохранение в BytesIO с оптимизацией
             output = BytesIO()
-            combined.convert("RGB").save(output, format="JPEG", quality=95)
+            combined.convert("RGB").save(output, format="JPEG", quality=92, optimize=True)
             output.seek(0)
             return output
 
@@ -395,47 +424,56 @@ class PostManager:
             await self._notify_user(f"🚨 Ошибка: {error_msg}", user_id=user_id)
             return
 
-        # --- UTM Link Generation with Track ID ---
-        affiliate_link = content_result.get('product_link') or product_data.get('AffiliateLink', '')
-        if affiliate_link:
-            utm_marks = sheets_api.get_utm_marks()
-            utm_params = []
-
-            # Add campaign-specific track ID if available
-            campaign_track_id = campaign.get('track_id')
-            if campaign_track_id:
-                utm_params.append(f"tag={campaign_track_id}")
-                print(f"✅ Added campaign Track ID: {campaign_track_id}")
-
-            for param, value in utm_marks.items():
-                utm_params.append(f"{param}={value}")
-
-            # Add campaign-specific UTM if not present
-            if 'utm_campaign' not in utm_marks:
-                utm_params.append(f"utm_campaign={campaign['name'].replace(' ', '_')}")
-
-            utm_string = "&".join(utm_params)
-            final_link = f"{affiliate_link}{'&' if '?' in affiliate_link else '?'}{utm_string}"
-        else:
-            final_link = affiliate_link
+        # Get base affiliate link and UTM marks
+        base_affiliate_link = content_result.get('product_link') or product_data.get('AffiliateLink', '')
+        utm_marks = sheets_api.get_utm_marks()
+        channel_tracking_ids = sheets_api.get_channel_tracking_ids()
 
         # --- Format Final Content ---
-        text_content = content_result['text']
-
-        # Add affiliate link to content
-        if final_link:
-            text_content += f"\n\n🔗 [Shop Now]({final_link})"
+        base_text_content = content_result['text']
 
         # --- Posting with Watermark ---
-        # Truncate content to Telegram's caption limit (1024 chars)
-        if len(text_content) > 1024:
-            text_content = text_content[:1020] + "..."
-
         image_urls = content_result.get('product_images') or product_data.get('ImageURLs', [])
         channels = params.get('channels', [])
         successful_posts = 0
 
         for channel_name in channels:
+            # Create channel-specific UTM link
+            if base_affiliate_link:
+                utm_params = []
+
+                # Add channel-specific track ID, fallback to campaign track_id
+                channel_track_id = channel_tracking_ids.get(channel_name)
+                if channel_track_id:
+                    utm_params.append(f"tag={channel_track_id}")
+                    print(f"✅ Added channel Track ID for {channel_name}: {channel_track_id}")
+                else:
+                    # Fallback to campaign track_id
+                    campaign_track_id = campaign.get('track_id')
+                    if campaign_track_id:
+                        utm_params.append(f"tag={campaign_track_id}")
+                        print(f"✅ Added campaign Track ID (fallback) for {channel_name}: {campaign_track_id}")
+
+                for param, value in utm_marks.items():
+                    utm_params.append(f"{param}={value}")
+
+                # Add campaign-specific UTM if not present
+                if 'utm_campaign' not in utm_marks:
+                    utm_params.append(f"utm_campaign={campaign['name'].replace(' ', '_')}")
+
+                utm_string = "&".join(utm_params)
+                final_link = f"{base_affiliate_link}{'&' if '?' in base_affiliate_link else '?'}{utm_string}"
+            else:
+                final_link = base_affiliate_link
+
+            # Create channel-specific text content
+            text_content = base_text_content
+            if final_link:
+                text_content += f"\n\n🔗 [Shop Now]({final_link})"
+
+            # Truncate content to Telegram's caption limit (1024 chars)
+            if len(text_content) > 1024:
+                text_content = text_content[:1020] + "..."
             try:
                 if not image_urls:
                     # No images, send text only
@@ -588,47 +626,62 @@ class PostManager:
             await self._notify_user(f"🚨 Ошибка: {error_msg}", user_id=user_id)
             return
 
-        # --- UTM Link Generation with Track ID ---
-        affiliate_link = content_result.get('product_link') or formatted_product_data.get('affiliate_link', '')
-        if affiliate_link:
-            utm_marks = sheets_api.get_utm_marks()
-            utm_params = []
-
-            # Add campaign-specific track ID if available
-            campaign_track_id = campaign.get('track_id')
-            if campaign_track_id:
-                utm_params.append(f"tag={campaign_track_id}")
-                print(f"✅ Added campaign Track ID: {campaign_track_id}")
-
-            for param, value in utm_marks.items():
-                utm_params.append(f"{param}={value}")
-
-            # Add campaign-specific UTM if not present
-            if 'utm_campaign' not in utm_marks:
-                utm_params.append(f"utm_campaign={campaign['name'].replace(' ', '_')}")
-
-            utm_string = "&".join(utm_params)
-            final_link = f"{affiliate_link}{'&' if '?' in affiliate_link else '?'}{utm_string}"
-        else:
-            final_link = affiliate_link
+        # Get base affiliate link and UTM marks
+        base_affiliate_link = content_result.get('product_link') or formatted_product_data.get('affiliate_link', '')
+        utm_marks = sheets_api.get_utm_marks()
+        channel_tracking_ids = sheets_api.get_channel_tracking_ids()
 
         # --- Format Final Content ---
-        text_content = content_result['text']
-
-        # Add affiliate link to content
-        if final_link:
-            text_content += f"\n\n🔗 [Shop Now]({final_link})"
+        base_text_content = content_result['text']
 
         # --- Posting with Watermark ---
-        # Truncate content to Telegram's caption limit (1024 chars)
-        if len(text_content) > 1024:
-            text_content = text_content[:1020] + "..."
-
         image_urls = content_result.get('product_images') or formatted_product_data.get('image_urls', [])
         channels = params.get('channels', [])
         successful_posts = 0
 
+        # Store channel-specific links for statistics logging
+        channel_links = {}
+
         for channel_name in channels:
+            # Create channel-specific UTM link
+            if base_affiliate_link:
+                utm_params = []
+
+                # Add channel-specific track ID, fallback to campaign track_id
+                channel_track_id = channel_tracking_ids.get(channel_name)
+                if channel_track_id:
+                    utm_params.append(f"tag={channel_track_id}")
+                    print(f"✅ Added channel Track ID for {channel_name}: {channel_track_id}")
+                else:
+                    # Fallback to campaign track_id
+                    campaign_track_id = campaign.get('track_id')
+                    if campaign_track_id:
+                        utm_params.append(f"tag={campaign_track_id}")
+                        print(f"✅ Added campaign Track ID (fallback) for {channel_name}: {campaign_track_id}")
+
+                for param, value in utm_marks.items():
+                    utm_params.append(f"{param}={value}")
+
+                # Add campaign-specific UTM if not present
+                if 'utm_campaign' not in utm_marks:
+                    utm_params.append(f"utm_campaign={campaign['name'].replace(' ', '_')}")
+
+                utm_string = "&".join(utm_params)
+                final_link = f"{base_affiliate_link}{'&' if '?' in base_affiliate_link else '?'}{utm_string}"
+            else:
+                final_link = base_affiliate_link
+
+            # Store channel-specific link for stats logging
+            channel_links[channel_name] = final_link
+
+            # Create channel-specific text content
+            text_content = base_text_content
+            if final_link:
+                text_content += f"\n\n🔗 [Shop Now]({final_link})"
+
+            # Truncate content to Telegram's caption limit (1024 chars)
+            if len(text_content) > 1024:
+                text_content = text_content[:1020] + "..."
             try:
                 if not image_urls:
                     # No images, send text only
@@ -656,10 +709,11 @@ class PostManager:
                         if image_stream:
                             image_stream.seek(0)
                             photo_file = BufferedInputFile(image_stream.read(), filename=f"photo{i}.jpg")
+                            # Add caption only to the first photo
                             caption = text_content if i == 0 else None
                             parse_mode = 'Markdown' if i == 0 else None
                             media_group.append(InputMediaPhoto(media=photo_file, caption=caption, parse_mode=parse_mode))
-                    
+
                     if media_group:
                         await self.bot.send_media_group(chat_id=channel_name, media=media_group)
 

@@ -96,21 +96,45 @@ class GoogleSheetsAPI:
             print(f"Error reading UTM marks: {e}")
             return {}
 
-    def get_categories_subcategories(self) -> list[dict]:
-        """Получает объединенные данные категорий и подкатегорий."""
+    def get_channel_tracking_ids(self) -> dict:
+        """Получает tracking IDs для каналов из таблицы channels."""
+        if not self.available:
+            # Return dummy channel tracking IDs for testing
+            return {
+                "@CheapAmazon3332234": "tg_bot_main",
+                "@test_channel": "tg_bot_test"
+            }
+
+        try:
+            data = self.get_sheet_data("channels")
+            channel_tracking = {}
+            for row in data[1:]:  # Skip header, expect columns: channel_name, tracking_id
+                if len(row) >= 2 and row[0] and row[1]:
+                    channel_tracking[row[0]] = row[1]
+            return channel_tracking
+        except Exception as e:
+            print(f"Error reading channel tracking IDs: {e}")
+            return {}
+
+    def get_categories_subcategories(self, language: str = 'it') -> list[dict]:
+        """Получает объединенные данные категорий и подкатегорий с учетом языка."""
         if not self.available:
             # Return dummy data for testing
             return [
                 {
                     "category": "Apparel",
+                    "category_ru": "Одежда",
                     "node_id_category": "2892859031",
                     "subcategory": "Abbigliamento da notte, lingerie e intimo",
+                    "subcategory_ru": "Ночное белье, нижнее белье и интим",
                     "node_id_subcategory": "21695399031"
                 },
                 {
                     "category": "Apparel",
+                    "category_ru": "Одежда",
                     "node_id_category": "2892859031",
                     "subcategory": "Abbigliamento premaman",
+                    "subcategory_ru": "Одежда для беременных",
                     "node_id_subcategory": "1806562031"
                 }
             ]
@@ -119,43 +143,51 @@ class GoogleSheetsAPI:
             data = self.get_sheet_data("categories_subcategories")
             categories = []
             for row in data[1:]:  # Skip header
-                if len(row) >= 4:
+                if len(row) >= 6:  # category, category_ru, node_id_category, subcategory, subcategory_ru, node_id_subcategory
                     categories.append({
-                        "category": row[0],
-                        "node_id_category": row[1],
-                        "subcategory": row[2],
-                        "node_id_subcategory": row[3]
+                        "category": row[0] if language == 'it' else row[1],  # Always include original for internal use
+                        "category_ru": row[1],
+                        "node_id_category": row[2],
+                        "subcategory": row[3] if language == 'it' else row[4],
+                        "subcategory_ru": row[4],
+                        "node_id_subcategory": row[5]
                     })
             return categories
         except Exception as e:
             print(f"Error reading categories_subcategories: {e}")
             return []
 
-    def get_unique_categories(self) -> list[dict]:
-        """Получает уникальные категории из объединенной таблицы."""
-        categories_data = self.get_categories_subcategories()
+    def get_unique_categories(self, language: str = 'it') -> list[dict]:
+        """Получает уникальные категории из объединенной таблицы с учетом языка."""
+        categories_data = self.get_categories_subcategories(language)
         unique_categories = {}
 
         for item in categories_data:
-            category_name = item["category"]
-            if category_name not in unique_categories:
-                unique_categories[category_name] = {
-                    "name": category_name,
-                    "node_id": item["node_id_category"]
+            # Use the translated category name as name, but keep original for lookups
+            category_display_name = item["category_ru"] if language == 'ru' else item["category"]
+            category_key = item["category"]  # Always use Italian as key for internal consistency
+            if category_key not in unique_categories:
+                unique_categories[category_key] = {
+                    "name": category_display_name,
+                    "node_id": item["node_id_category"],
+                    "original_name": item["category"]  # Keep original for mapping
                 }
 
         return list(unique_categories.values())
 
-    def get_subcategories_for_category(self, category_name: str) -> list[dict]:
-        """Получает подкатегории для указанной категории."""
-        categories_data = self.get_categories_subcategories()
+    def get_subcategories_for_category(self, category_name: str, language: str = 'it') -> list[dict]:
+        """Получает подкатегории для указанной категории с учетом языка."""
+        categories_data = self.get_categories_subcategories(language)
         subcategories = []
 
         for item in categories_data:
+            # Match by original category name (Italian)
             if item["category"] == category_name:
+                subcategory_display_name = item["subcategory_ru"] if language == 'ru' else item["subcategory"]
                 subcategories.append({
-                    "name": item["subcategory"],
-                    "node_id": item["node_id_subcategory"]
+                    "name": subcategory_display_name,
+                    "node_id": item["node_id_subcategory"],
+                    "original_name": item["subcategory"]  # Keep original for mapping
                 })
 
         return subcategories

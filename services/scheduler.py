@@ -167,7 +167,9 @@ class CampaignScheduler:
         """Проверяет, соответствует ли текущее время таймингу кампании."""
         for timing in campaign.get('timings', []):
             # Проверяем день
-            if timing['day_of_week'] == current_day:
+            # Support for daily schedules: if day_of_week is None or negative, treat as daily
+            timing_day = timing.get('day_of_week')
+            if timing_day is None or timing_day < 0 or timing_day == current_day:
                 # Проверяем, находится ли текущее время в интервале [start_time, end_time)
                 start = timing['start_time']
                 end = timing['end_time']

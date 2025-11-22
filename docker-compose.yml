@@ -1,6 +1,6 @@
 # docker-compose.yml
 
-version: '3.8'
+
 
 services:
   # 1. Сервис для Telegram-бота
@@ -23,7 +23,7 @@ services:
     container_name: affiliate_bot_redis
     restart: unless-stopped
     ports:
-      - "6379:6379" # Опционально: маппинг порта для локальной отладки
+      - "6378:6379" # Changed from 6379 to avoid conflict with existing Redis
 
   # 3. Сервис для PostgreSQL (Campaigns, Timings, Stats)
   db:
