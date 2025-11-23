@@ -683,7 +683,6 @@ class CampaignManager:
                 browse_node_ids=browse_node_ids,
                 min_rating=params.get('min_rating', 4.0),
                 min_price=params.get('min_price'),
-                min_saving_percent=params.get('min_saving_percent'),
                 fulfilled_by_amazon=params.get('fulfilled_by_amazon'),
                 max_sales_rank=params.get('max_sales_rank', 10000),
                 max_results=min(limit * 2, 50)  # Get more results to filter from

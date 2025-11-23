@@ -219,7 +219,6 @@ class CampaignScheduler:
             browse_node_ids = params.get('browse_node_ids', [])
             min_rating = params.get('min_rating', 0.0)
             min_price = params.get('min_price')
-            min_saving_percent = params.get('min_saving_percent')
             fulfilled_by_amazon = params.get('fulfilled_by_amazon')
             # Get campaign-specific sales rank threshold (simplified quality control)
             max_sales_rank = params.get('max_sales_rank', 10000)
@@ -239,7 +238,6 @@ class CampaignScheduler:
                     browse_node_ids=browse_node_ids,
                     min_rating=min_rating,
                     min_price=min_price,
-                    min_saving_percent=min_saving_percent,
                     fulfilled_by_amazon=fulfilled_by_amazon,
                     max_results=50  # Increased from 10 to 50 to find more new products
                 )
