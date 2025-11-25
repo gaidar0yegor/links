@@ -227,7 +227,7 @@ class ContentGenerator:
             product_info = f"""
 ---
 PRODUCT INFORMATION TO USE:
-Product Name: {product_data.get('Title', product_data.get('name', 'Unknown Product'))}
+Product Name: {product_data.get('Title', product_data.get('title', product_data.get('name', 'Unknown Product')))}
 Rating: {product_data.get('Rating', product_data.get('rating', 'N/A'))}/5 stars
 Review Count: {product_data.get('ReviewsCount', product_data.get('review_count', 'N/A'))} reviews
 Price: {product_data.get('Price', product_data.get('price', 'N/A'))}{feature_text}

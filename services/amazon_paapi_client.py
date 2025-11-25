@@ -354,6 +354,7 @@ class AmazonPAAPIClient:
                             SearchItemsResource.ITEMINFO_TITLE,
                             SearchItemsResource.OFFERS_LISTINGS_PRICE,
                             SearchItemsResource.IMAGES_PRIMARY_LARGE,
+                            SearchItemsResource.IMAGES_VARIANTS_LARGE, # Request variant images
                             SearchItemsResource.ITEMINFO_FEATURES,
                             SearchItemsResource.ITEMINFO_PRODUCTINFO,
                         ],
@@ -420,6 +421,7 @@ class AmazonPAAPIClient:
                     SearchItemsResource.ITEMINFO_TITLE,
                     SearchItemsResource.OFFERS_LISTINGS_PRICE,
                     SearchItemsResource.IMAGES_PRIMARY_LARGE,
+                    SearchItemsResource.IMAGES_VARIANTS_LARGE, # Request variant images
                     SearchItemsResource.ITEMINFO_FEATURES,
                     SearchItemsResource.ITEMINFO_PRODUCTINFO,
                 ],
@@ -445,7 +447,7 @@ class AmazonPAAPIClient:
         product_data = {
             "ASIN": getattr(item, 'asin', ''),
             "Title": "",
-            "ImageURL": "",
+            "ImageURLs": [], # Changed from ImageURL to ImageURLs
             "AffiliateLink": getattr(item, 'detail_page_url', ''),
             "Price": "",
             "Rating": "",
@@ -465,11 +467,27 @@ class AmazonPAAPIClient:
                     if hasattr(item.item_info.product_info.item_dimensions, 'item_width') and item.item_info.product_info.item_dimensions.item_width:
                         product_data["Category"] = getattr(item.item_info.product_info.item_dimensions.item_width, 'display_value', '')
 
-        # Extract image
+        # Extract images (primary and variants)
+        image_urls = []
         if hasattr(item, 'images') and item.images:
-            if hasattr(item.images, 'primary') and item.images.primary:
-                if hasattr(item.images.primary, 'large') and item.images.primary.large:
-                    product_data["ImageURL"] = getattr(item.images.primary.large, 'url', '')
+            # Primary image
+            if hasattr(item.images, 'primary') and item.images.primary and hasattr(item.images.primary, 'large') and item.images.primary.large:
+                primary_url = getattr(item.images.primary.large, 'url', '')
+                if primary_url:
+                    image_urls.append(primary_url)
+            
+            # Variant images
+            if hasattr(item.images, 'variants') and item.images.variants:
+                for variant in item.images.variants:
+                    if len(image_urls) >= 3:
+                        break
+                    if hasattr(variant, 'large') and variant.large:
+                        variant_url = getattr(variant, 'large', {}).get('url', '')
+                        if variant_url and variant_url not in image_urls:
+                            image_urls.append(variant_url)
+        
+        product_data["ImageURLs"] = image_urls[:3]
+
 
         # Extract price
         if hasattr(item, 'offers') and item.offers:
@@ -905,8 +923,7 @@ class AmazonPAAPIClient:
                             enriched_products.append(enriched_data)
 
                 # Rate limiting between batches
-                import time
-                time.sleep(0.2)
+                await asyncio.sleep(0.2)
 
             except ApiException as e:
                 print(f"DEBUG: GetItems API Exception for batch {batch_asins[:3]}...: {e.reason}")

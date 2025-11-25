@@ -65,8 +65,11 @@ DAYS_MAPPING = {i: day for i, day in enumerate(DAYS)} # 0: "Пн", 1: "Вт" и 
 # REMOVED: Duplicate handler for MainMenuCallback.CAMPAIGNS
 # This is now handled by handlers/main_menu.py to avoid conflicts
 
-async def enter_campaign_module(callback: CallbackQuery, state: FSMContext):
-    """Обрабатывает вход в модуль 'Рекламные кампании'."""
+async def enter_campaign_module(callback: CallbackQuery, state: FSMContext, campaign_name: Optional[str] = None):
+    """
+    Обрабатывает вход в модуль 'Рекламные кампании'.
+    Может принимать `campaign_name` для отображения сообщения после создания кампании.
+    """
     print(f"🎯 Campaign module entered from main menu")
 
     await state.set_state(CampaignStates.in_campaign_menu)
@@ -93,6 +96,11 @@ async def enter_campaign_module(callback: CallbackQuery, state: FSMContext):
         campaigns = []
 
     text = "<b>🎯 Управление рекламными кампаниями</b>\n\nВыберите операцию или кампанию для редактирования:"
+    if campaign_name:
+        text = (
+            f"🎉 Кампания <b>'{campaign_name}'</b> успешно создана.\n"
+            "Идет фоновый поиск товаров для наполнения очереди.\n\n"
+        ) + text
 
     keyboard = get_campaign_menu_keyboard(campaigns)
     print(f"⌨️ Generated keyboard with {len(keyboard.inline_keyboard)} buttons")
@@ -102,7 +110,6 @@ async def enter_campaign_module(callback: CallbackQuery, state: FSMContext):
         reply_markup=keyboard,
         parse_mode="HTML"
     )
-    await callback.answer()
 
 @router.callback_query(F.data.startswith("campaign_edit:"), StateFilter("*"))
 async def enter_campaign_edit_menu(callback: CallbackQuery, state: FSMContext):

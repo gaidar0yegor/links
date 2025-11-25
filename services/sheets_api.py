@@ -51,6 +51,52 @@ class GoogleSheetsAPI:
             print(f"Error reading whitelist: {e}")
             return []
 
+    def get_users_for_notification(self) -> list[int]:
+        """
+        Получает список Telegram ID пользователей, у которых включены уведомления.
+        Ожидает колонки: [Telegram ID, ..., Notification (Yes/No)]
+        Предполагаем, что Notification - это, например, 3-я колонка (индекс 2), или ищем по заголовку.
+        Для надежности будем искать заголовок 'notification'.
+        """
+        if not self.available:
+            # Dummy data: only 117422597 wants notifications
+            print("Using dummy notification list for testing")
+            return [117422597]
+
+        try:
+            worksheet = self.spreadsheet.worksheet("users_whitelist")
+            data = worksheet.get_all_values()
+
+            if not data:
+                return []
+
+            headers = [h.lower() for h in data[0]]
+            try:
+                id_idx = 0 # Обычно ID в первой колонке
+                # Попытаемся найти колонку 'notification'
+                notify_idx = headers.index('notification')
+            except ValueError:
+                print("⚠️ Column 'notification' not found in users_whitelist")
+                return []
+
+            notify_users = []
+            for row in data[1:]: # Пропускаем заголовок
+                if len(row) > notify_idx and len(row) > id_idx:
+                    user_id_str = row[id_idx]
+                    notify_val = row[notify_idx].strip().lower()
+
+                    if user_id_str.isdigit() and notify_val in ['yes', 'true', '1', '+']:
+                        notify_users.append(int(user_id_str))
+
+            return notify_users
+
+        except WorksheetNotFound:
+            print("WARNING: Worksheet 'users_whitelist' not found.")
+            return []
+        except Exception as e:
+            print(f"Error getting notification users: {e}")
+            return []
+
     def get_sheet_data(self, sheet_name: str) -> list[list[str]]:
         """Общий метод для получения данных из любой таблицы."""
         if not self.available:
@@ -116,8 +162,8 @@ class GoogleSheetsAPI:
             print(f"Error reading channel tracking IDs: {e}")
             return {}
 
-    def get_categories_subcategories(self, language: str = 'it') -> list[dict]:
-        """Получает объединенные данные категорий и подкатегорий с учетом языка."""
+    def get_categories_subcategories(self) -> list[dict]:
+        """Получает объединенные данные категорий и подкатегорий."""
         if not self.available:
             # Return dummy data for testing
             return [
@@ -145,10 +191,10 @@ class GoogleSheetsAPI:
             for row in data[1:]:  # Skip header
                 if len(row) >= 6:  # category, category_ru, node_id_category, subcategory, subcategory_ru, node_id_subcategory
                     categories.append({
-                        "category": row[0] if language == 'it' else row[1],  # Always include original for internal use
+                        "category": row[0],
                         "category_ru": row[1],
                         "node_id_category": row[2],
-                        "subcategory": row[3] if language == 'it' else row[4],
+                        "subcategory": row[3],
                         "subcategory_ru": row[4],
                         "node_id_subcategory": row[5]
                     })
@@ -157,14 +203,14 @@ class GoogleSheetsAPI:
             print(f"Error reading categories_subcategories: {e}")
             return []
 
-    def get_unique_categories(self, language: str = 'it') -> list[dict]:
-        """Получает уникальные категории из объединенной таблицы с учетом языка."""
-        categories_data = self.get_categories_subcategories(language)
+    def get_unique_categories(self) -> list[dict]:
+        """Получает уникальные категории из объединенной таблицы (на русском)."""
+        categories_data = self.get_categories_subcategories()
         unique_categories = {}
 
         for item in categories_data:
             # Use the translated category name as name, but keep original for lookups
-            category_display_name = item["category_ru"] if language == 'ru' else item["category"]
+            category_display_name = item["category_ru"]
             category_key = item["category"]  # Always use Italian as key for internal consistency
             if category_key not in unique_categories:
                 unique_categories[category_key] = {
@@ -175,15 +221,15 @@ class GoogleSheetsAPI:
 
         return list(unique_categories.values())
 
-    def get_subcategories_for_category(self, category_name: str, language: str = 'it') -> list[dict]:
-        """Получает подкатегории для указанной категории с учетом языка."""
-        categories_data = self.get_categories_subcategories(language)
+    def get_subcategories_for_category(self, category_name: str) -> list[dict]:
+        """Получает подкатегории для указанной категории (на русском)."""
+        categories_data = self.get_categories_subcategories()
         subcategories = []
 
         for item in categories_data:
             # Match by original category name (Italian)
             if item["category"] == category_name:
-                subcategory_display_name = item["subcategory_ru"] if language == 'ru' else item["subcategory"]
+                subcategory_display_name = item["subcategory_ru"]
                 subcategories.append({
                     "name": subcategory_display_name,
                     "node_id": item["node_id_subcategory"],

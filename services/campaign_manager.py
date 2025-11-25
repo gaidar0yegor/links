@@ -178,7 +178,7 @@ class CampaignManager:
         """Получает активные кампании (status='running') вместе с их таймингами."""
 
         # 1. Запрос активных кампаний (сортировка по ID для консистентности)
-        campaigns_query = "SELECT id, name, params FROM campaigns WHERE status = 'running' ORDER BY id;"
+        campaigns_query = "SELECT id, name, params, min_review_count FROM campaigns WHERE status = 'running' ORDER BY id;"
         async with self.db_pool.acquire() as conn:
             campaign_records = await conn.fetch(campaigns_query)
 
@@ -195,6 +195,10 @@ class CampaignManager:
                         campaign['params'] = json.loads(campaign['params'])
                     except json.JSONDecodeError:
                         campaign['params'] = {}
+                
+                # Add min_review_count to params so post_manager can use it
+                if 'min_review_count' in campaign:
+                    campaign['params']['min_review_count'] = campaign['min_review_count']
 
             campaign_ids = [c['id'] for c in campaigns]
 
@@ -576,7 +580,7 @@ class CampaignManager:
         query = """
         INSERT INTO product_queue (
             campaign_id, asin, title, price, currency, rating, review_count,
-            sales_rank, image_url, affiliate_link, browse_node_ids, quality_score, features
+            sales_rank, image_urls, affiliate_link, browse_node_ids, quality_score, features
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         RETURNING id;
         """
@@ -592,7 +596,7 @@ class CampaignManager:
                 product_data.get('rating'),
                 product_data.get('review_count'),
                 product_data.get('sales_rank'),
-                product_data.get('image_url'),
+                product_data.get('image_urls', []), # Changed from image_url
                 product_data.get('affiliate_link'),
                 product_data.get('browse_node_ids', []),
                 product_data.get('sales_rank'),  # Quality score = sales rank
@@ -720,7 +724,7 @@ class CampaignManager:
                     'rating': product.get('rating'),
                     'review_count': review_count,
                     'sales_rank': product.get('sales_rank'),
-                    'image_url': product.get('image_url'),
+                    'image_urls': product.get('image_urls', []), # Changed from image_url
                     'affiliate_link': product.get('affiliate_link'),
                     'browse_node_ids': browse_node_ids
                 }

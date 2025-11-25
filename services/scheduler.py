@@ -120,21 +120,23 @@ class CampaignScheduler:
             if queued_product:
                 print(f"📦 Используем продукт из очереди: {queued_product['asin']} - {queued_product['title'][:50]}...")
 
-                # Преобразуем данные продукта в формат, ожидаемый post_manager
-                product_data = {
+                # Use the new format expected by post_queued_product
+                product_data_for_post = {
                     'asin': queued_product['asin'],
-                    'title': queued_product['title'],
+                    'Title': queued_product['title'],
                     'price': queued_product['price'],
                     'currency': queued_product['currency'],
                     'rating': queued_product['rating'],
                     'review_count': queued_product['review_count'],
                     'sales_rank': queued_product['sales_rank'],
-                    'image_url': queued_product['image_url'],
-                    'affiliate_link': queued_product['affiliate_link']
+                    'image_urls': queued_product['image_urls'],
+                    'affiliate_link': queued_product['affiliate_link'],
+                    'features': queued_product['features'],
+                    'description': '' # Description is generated from features if needed
                 }
 
                 # Запуск постинга с продуктом из очереди
-                await self.post_manager.post_queued_product(selected_campaign, product_data)
+                await self.post_manager.post_queued_product(selected_campaign, product_data_for_post)
 
                 # Отмечаем продукт как опубликованный
                 await self.campaign_manager.mark_product_posted(queued_product['id'])

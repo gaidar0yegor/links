@@ -12,6 +12,7 @@ class CampaignStates(StatesGroup):
     campaign_new_select_category = State()
     campaign_new_select_subcategory = State()
     campaign_new_select_rating = State()
+    campaign_new_input_min_reviews = State()  # Новое состояние
     campaign_new_select_language = State()
     campaign_new_input_name = State()
     campaign_new_review = State()

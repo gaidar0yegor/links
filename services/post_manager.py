@@ -21,41 +21,46 @@ class PostManager:
             self.llm_client = None
 
     async def _notify_user(self, message: str, user_id: Optional[int] = None, campaign_id: Optional[int] = None):
-        """Отправляет уведомление целевому пользователю или администратору в качестве фолбэка."""
-        target_id = user_id
+        """Отправляет уведомление пользователям с включенными уведомлениями (whitelist -> notification=Yes)."""
+        
+        # 1. Получаем список пользователей для уведомлений из Google Sheets
+        target_ids = sheets_api.get_users_for_notification()
 
-        # If no user_id provided, try to get campaign creator
-        if not target_id and campaign_id:
-            try:
-                from services.campaign_manager import get_campaign_manager
-                campaign_mgr = get_campaign_manager()
-                if campaign_mgr:
-                    campaign_details = await campaign_mgr.get_campaign_details_full(campaign_id)
-                    if campaign_details and campaign_details.get('created_by_user_id'):
-                        target_id = campaign_details['created_by_user_id']
-            except Exception as e:
-                print(f"⚠️  Не удалось получить создателя кампании {campaign_id}: {e}")
-
-        if not target_id:
-            try:
-                # Фолбэк: получаем ID администратора из конфигурации или используем первый из whitelist
-                if hasattr(self.bot, 'admin_id'):
-                    target_id = self.bot.admin_id
-                else:
+        # 2. Если список пуст, используем фолбэк (создатель кампании или админ)
+        if not target_ids:
+            if user_id:
+                target_ids = [user_id]
+            elif campaign_id:
+                try:
+                    from services.campaign_manager import get_campaign_manager
+                    campaign_mgr = get_campaign_manager()
+                    if campaign_mgr:
+                        campaign_details = await campaign_mgr.get_campaign_details_full(campaign_id)
+                        if campaign_details and campaign_details.get('created_by_user_id'):
+                            target_ids = [campaign_details['created_by_user_id']]
+                except Exception as e:
+                    print(f"⚠️  Не удалось получить создателя кампании {campaign_id}: {e}")
+            
+            # Если все еще пусто, пробуем админа
+            if not target_ids:
+                 if hasattr(self.bot, 'admin_id'):
+                    target_ids = [self.bot.admin_id]
+                 else:
+                    # Fallback to first whitelist user if available
                     whitelist = sheets_api.get_whitelist()
                     if whitelist:
-                        target_id = whitelist[0]  # Первый пользователь из whitelist
-            except Exception as e:
-                print(f"⚠️  Не удалось получить ID администратора для фолбэк-уведомления: {e}")
-                return
+                        target_ids = [whitelist[0]]
 
-        if target_id:
+        if not target_ids:
+            print(f"⚠️ Некому отправлять уведомление: {message}")
+            return
+
+        # 3. Отправляем сообщение всем получателям
+        for target_id in set(target_ids): # Use set to avoid duplicates
             try:
                 await self.bot.send_message(chat_id=target_id, text=message)
             except Exception as e:
-                print(f"⚠️  Ошибка отправки уведомления пользователю {target_id}: {e}")
-        else:
-            print(f"⚠️  Не удалось отправить уведомление: ID получателя не найден.")
+                print(f"⚠️ Ошибка отправки уведомления пользователю {target_id}: {e}")
 
     def _get_rewrite_prompt(self):
         """Получает промпт для рерайта из Google Sheets (таблица rewrite_prompt)."""
@@ -78,7 +83,7 @@ class PostManager:
             draw = ImageDraw.Draw(watermark_layer)
 
             # 3. Настройка шрифта
-            font_size = max(24, min(img.width, img.height) // 25)  # Увеличен минимальный размер
+            font_size = max(50, min(img.width, img.height) // 8)  # Even larger font
             try:
                 font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size)
             except:
@@ -89,52 +94,26 @@ class PostManager:
             text_width = text_bbox[2] - text_bbox[0]
             text_height = text_bbox[3] - text_bbox[1]
 
-            # 5. Создание стильного фона для текста (полупрозрачный черный с закруглением)
-            padding = 16
-            bg_x1 = img.width - text_width - padding * 3
-            bg_y1 = img.height - text_height - padding * 2
-            bg_x2 = img.width - padding
-            bg_y2 = img.height - padding
+            # 5. Position text in the bottom-right corner
+            padding = max(20, font_size // 4)
+            text_x = img.width - text_width - padding
+            text_y = img.height - text_height - padding
+            
+            # 6. Draw a subtle drop shadow for contrast
+            shadow_offset = max(2, font_size // 25)
+            shadow_color = (0, 0, 0, 128) # Semi-transparent black
+            draw.text((text_x + shadow_offset, text_y + shadow_offset), channel_name, font=font, fill=shadow_color)
 
-            # Рисуем закругленный прямоугольник с градиентом
-            from PIL import ImageDraw
-            draw.rounded_rectangle(
-                [(bg_x1, bg_y1), (bg_x2, bg_y2)],
-                radius=12,  # Закругленные углы
-                fill=(0, 0, 0, 140)  # Полупрозрачный черный фон
-            )
-
-            # Добавляем легкую тень/обводку для лучшей видимости
-            shadow_offset = 2
-            for offset_x, offset_y in [(-shadow_offset, -shadow_offset), (-shadow_offset, shadow_offset),
-                                     (shadow_offset, -shadow_offset), (shadow_offset, shadow_offset)]:
-                draw.text(
-                    (bg_x1 + padding + offset_x, bg_y1 + padding + offset_y),
-                    channel_name,
-                    fill=(0, 0, 0, 80),
-                    font=font
-                )
-
-            # 6. Рисуем основной текст белым цветом
-            text_x = bg_x1 + padding
-            text_y = bg_y1 + padding
-            draw.text((text_x, text_y), channel_name, fill=(255, 255, 255, 255), font=font)
-
-            # 7. Добавляем тонкий белый бордер для выделения
-            for offset_x, offset_y in [(-1, -1), (-1, 1), (1, -1), (1, 1)]:
-                draw.text(
-                    (text_x + offset_x, text_y + offset_y),
-                    channel_name,
-                    fill=(255, 255, 255, 60),
-                    font=font
-                )
+            # 7. Draw the main semi-transparent text
+            text_color = (255, 255, 255, 150) # More opaque white
+            draw.text((text_x, text_y), channel_name, fill=text_color, font=font)
 
             # 8. Объединяем изображение с водяным знаком
             combined = Image.alpha_composite(img, watermark_layer)
 
             # 9. Сохранение в BytesIO с оптимизацией
             output = BytesIO()
-            combined.convert("RGB").save(output, format="JPEG", quality=92, optimize=True)
+            combined.convert("RGB").save(output, format="JPEG", quality=95, optimize=True) # Increased quality
             output.seek(0)
             return output
 
@@ -281,11 +260,19 @@ class PostManager:
                                               isinstance(product.get('features'), list) and
                                               len(product.get('features', [])) > 0)
 
-                                if has_price and has_title:
+                                                                # Check review count
+                                min_reviews = params.get('min_review_count', 0)
+                                has_enough_reviews = True
+                                if min_reviews > 0:
+                                    review_count = product.get('review_count')
+                                    if review_count is None or int(review_count) < min_reviews:
+                                        has_enough_reviews = False
+
+                                if has_price and has_title and has_enough_reviews:
                                     quality_products.append(product)
                                     print(f"DEBUG: Quality product found: {product.get('title', 'Unknown')} (ASIN: {product.get('asin')}) - Price: €{product.get('price')}, Rating: {has_rating}, Rank: {has_sales_rank}, Features: {has_features}")
                                 else:
-                                    print(f"DEBUG: Skipping incomplete product: {product.get('title', 'Unknown')} (ASIN: {product.get('asin')}) - Price: {has_price}, Title: {bool(has_title)}")
+                                    print(f"DEBUG: Skipping incomplete product: {product.get('title', 'Unknown')} (ASIN: {product.get('asin')}) - Price: {has_price}, Title: {bool(has_title)}, Reviews: {has_enough_reviews}")
 
                             if quality_products:
                                 # Pick a random quality product
@@ -332,6 +319,19 @@ class PostManager:
 
                         if candidate_product:
                             candidate_asin = candidate_product.get('ASIN') or candidate_product.get('asin', '')
+                            
+                            # Check review count for fallback product
+                            min_reviews = params.get('min_review_count', 0)
+                            reviews_count = candidate_product.get('ReviewsCount') or candidate_product.get('review_count', 0)
+                            try:
+                                reviews_count = int(reviews_count)
+                            except (ValueError, TypeError):
+                                reviews_count = 0
+                                
+                            if min_reviews > 0 and reviews_count < min_reviews:
+                                print(f"DEBUG: Fallback product {candidate_asin} skipped: reviews {reviews_count} < min {min_reviews}")
+                                continue
+
                             if candidate_asin and candidate_asin not in posted_asins:
                                 product_data = candidate_product
                                 print(f"DEBUG: Found new product (ASIN: {candidate_asin}) on attempt {attempt + 1}")
@@ -349,7 +349,7 @@ class PostManager:
                     queue_size = await campaign_manager_instance.get_queue_size(campaign_id)
                     if queue_size == 0:
                         await self._notify_user(
-                            f"⚠️ Очередь кампании '{campaign['name']}' пуста. Цикл обнаружения продуктов скоро ее пополнит.",
+                            f"⚠️ Очередь кампании '{campaign['name']}' пуста. Новые товары еще не были обнаружены. При повторной ошибке, стоит ослабить фильтры или перезапустить кампанию.",
                             user_id=user_id
                         )
                     return  # Skip posting instead of reposting
@@ -433,7 +433,7 @@ class PostManager:
         base_text_content = content_result['text']
 
         # --- Posting with Watermark ---
-        image_urls = content_result.get('product_images') or product_data.get('ImageURLs', [])
+        image_urls = content_result.get('product_images') or product_data.get('ImageURLs', []) # Use ImageURLs
         channels = params.get('channels', [])
         successful_posts = 0
 
@@ -541,11 +541,11 @@ class PostManager:
         Post a pre-fetched product from the queue without API calls.
         Used by the product queue system for faster, more reliable posting.
         """
-        print(f"📦 Posting queued product: {product_data.get('asin', 'Unknown')} - {product_data.get('title', 'Unknown')[:50]}...")
+        print(f"📦 Posting queued product: {product_data.get('asin', 'Unknown')} - {product_data.get('Title', 'Unknown')[:50]}...")
 
         # Quality check: ensure product has essential data (price + title) before posting
         has_price = product_data.get('price') is not None and product_data.get('price') > 0
-        has_title = product_data.get('title') and product_data.get('title').strip()
+        has_title = product_data.get('Title') and product_data.get('Title').strip()
 
         if not (has_price and has_title):
             print(f"⚠️  Skipping queued product {product_data.get('asin')} - missing essential data: Price: {has_price}, Title: {bool(has_title)}")
@@ -569,7 +569,7 @@ class PostManager:
         # Use enriched product data directly - content generator now handles multiple formats
         formatted_product_data = {
             'asin': product_data.get('asin', ''),
-            'title': product_data.get('title', ''),
+            'title': product_data.get('Title', ''),
             'image_urls': product_data.get('image_urls', []),
             'affiliate_link': product_data.get('affiliate_link', ''),
             'price': product_data.get('price'),  # Keep as numeric for better formatting
@@ -635,7 +635,7 @@ class PostManager:
         base_text_content = content_result['text']
 
         # --- Posting with Watermark ---
-        image_urls = content_result.get('product_images') or formatted_product_data.get('image_urls', [])
+        image_urls = content_result.get('product_images') or formatted_product_data.get('image_urls', []) # use image_urls
         channels = params.get('channels', [])
         successful_posts = 0
 
