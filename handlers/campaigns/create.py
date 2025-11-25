@@ -20,7 +20,24 @@ async def get_options_from_gsheets(sheet_name: str) -> List[Tuple[str, str]]:
         # Use new unified categories_subcategories table
         categories = sheets_api.get_unique_categories()
         # Возвращаем оригинальное имя категории (итальянское) для callback_data, чтобы сохранить совместимость
-        return [(cat["name"], cat["original_name"] if "original_name" in cat else cat["name"]) for cat in categories]
+        
+        options = []
+        for cat in categories:
+            display_name = cat["name"]
+            percent = cat.get("comission_percent", "")
+            
+            # Если есть процент, добавляем его к названию
+            if percent:
+                percent_str = str(percent).strip()
+                # Добавляем знак %, если его нет
+                if not percent_str.endswith("%"):
+                    percent_str += "%"
+                display_name = f"{display_name} - {percent_str}"
+            
+            original_name = cat["original_name"] if "original_name" in cat else cat["name"]
+            options.append((display_name, original_name))
+            
+        return options
     elif sheet_name == "subcategories":
         # This will be handled dynamically based on selected categories
         return []
@@ -408,7 +425,8 @@ async def input_min_price(message: Message, state: FSMContext):
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Да", callback_data="fba:yes")],
             [InlineKeyboardButton(text="Нет", callback_data="fba:no")],
-            [InlineKeyboardButton(text="Неважно", callback_data="fba:skip")]
+            [InlineKeyboardButton(text="Неважно", callback_data="fba:skip")],
+            [InlineKeyboardButton(text="⬅️ Назад к Мин. Цене", callback_data="back_to_min_price")]
         ])
         await message.answer(
             "<b>ШАГ 7: Fulfilled By Amazon (FBA)</b>\n\n"
@@ -721,7 +739,7 @@ async def input_campaign_name(message: Message, state: FSMContext):
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💾 Сохранить и выйти", callback_data="campaign_final_save")],
-        [InlineKeyboardButton(text="⬅️ Назад (Изменить название)", callback_data="campaign_done_language")] # Вернуться на Шаг 5
+        [InlineKeyboardButton(text="⬅️ Назад (Изменить название)", callback_data="back_to_name_input")] # Вернуться к вводу названия
     ])
 
     await message.answer(summary, reply_markup=keyboard, parse_mode="HTML")
@@ -1134,3 +1152,124 @@ async def finalize_and_save_campaign(callback: CallbackQuery, state: FSMContext)
 # Хэндлер для кнопки "назад" в меню кампаний
 from handlers.campaigns.manage import enter_campaign_module
 router.callback_query(F.data == "back_to_campaign_menu")(enter_campaign_module)
+
+@router.callback_query(F.data == "back_to_name_input")
+async def go_back_to_name_input(callback: CallbackQuery, state: FSMContext):
+    """Возврат к вводу названия кампании из финального обзора."""
+    await state.set_state(CampaignStates.campaign_new_input_name)
+    await callback.message.edit_text(
+        "<b>ШАГ 12: Ввод названия кампании</b>\n\n"
+        "Пожалуйста, введите уникальное название для новой кампании (текстовым сообщением):",
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+@router.callback_query(F.data == "campaign_done_categories", CampaignStates.campaign_new_select_rating)
+async def go_back_to_subcategories_from_rating(callback: CallbackQuery, state: FSMContext):
+    """Возврат из выбора рейтинга к выбору подкатегорий (начинаем с первой категории)."""
+    # Логика аналогична завершению выбора категорий - начинаем итерацию по подкатегориям заново
+    await done_select_categories(callback, state)
+
+# --- Fix Back Buttons ---
+
+@router.callback_query(F.data == "campaign_new_select_sales_rank")
+async def go_back_to_sales_rank(callback: CallbackQuery, state: FSMContext):
+    """Возврат к выбору Sales Rank (Шаг 8)."""
+    await state.set_state(CampaignStates.campaign_new_select_sales_rank)
+    
+    data = await state.get_data()
+    selected_list = data.get('new_campaign', {}).get('sales_ranks', [])
+
+    sales_rank_options = [
+        ("🏆 Ранг 1: 1-250 (Элитные топ товары)", "250"),
+        ("🥈 Ранг 2: 251-500 (Очень популярные)", "500"),
+        ("🥉 Ранг 3: 501-1000 (Популярные)", "1000"),
+        ("⭐ Ранг 4: 1001-2000 (Хорошие)", "2000"),
+        ("📈 Ранг 5: 2000+ (Расширенный выбор)", "100000")
+    ]
+
+    await callback.message.edit_text(
+        "<b>🎯 ШАГ 8: Качество товаров - Sales Rank</b>\n\n"
+        "⭐ <b>Выберите уровень качества товаров:</b>",
+        parse_mode="HTML",
+        reply_markup=get_multiselect_keyboard(
+            options=sales_rank_options,
+            selected_values=selected_list,
+            done_callback="campaign_done_sales_rank",
+            back_callback="campaign_done_fba"
+        )
+    )
+    await callback.answer()
+
+@router.callback_query(F.data == "campaign_done_fba")
+async def go_back_to_fba(callback: CallbackQuery, state: FSMContext):
+    """Возврат к выбору FBA (Шаг 7)."""
+    await state.set_state(CampaignStates.campaign_new_select_fba)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Да", callback_data="fba:yes")],
+        [InlineKeyboardButton(text="Нет", callback_data="fba:no")],
+        [InlineKeyboardButton(text="Неважно", callback_data="fba:skip")],
+        [InlineKeyboardButton(text="⬅️ Назад к Мин. Цене", callback_data="back_to_min_price")]
+    ])
+    await callback.message.edit_text(
+        "<b>ШАГ 7: Fulfilled By Amazon (FBA)</b>\n\n"
+        "Искать только товары, доставляемые Amazon?",
+        reply_markup=keyboard,
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+@router.callback_query(F.data == "back_to_min_price")
+async def go_back_to_min_price(callback: CallbackQuery, state: FSMContext):
+    """Возврат к вводу цены (Шаг 6)."""
+    data = await state.get_data()
+    min_reviews = data['new_campaign'].get('min_review_count', 0)
+    
+    await state.set_state(CampaignStates.campaign_new_input_min_price)
+    
+    await callback.message.edit_text(
+        f"<b>ШАГ 6: Минимальная цена</b>\n\n"
+        f"Мин. отзывов: <b>{min_reviews}</b>\n\n"
+        "Введите минимальную цену для товаров (например, `25` для €25). "
+        "Отправьте `0`, чтобы пропустить.\n\n"
+        "<i>(Введите значение заново)</i>",
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+@router.callback_query(F.data == "campaign_new_select_posting_frequency")
+async def go_back_to_frequency(callback: CallbackQuery, state: FSMContext):
+    """Возврат к выбору частоты (Шаг 9)."""
+    data = await state.get_data()
+    new_campaign = data.get('new_campaign', {})
+    selected_list = new_campaign.get('posting_frequencies', [])
+    
+    await state.set_state(CampaignStates.campaign_new_select_posting_frequency)
+    
+    frequency_options = [
+        ("🐌 0.5 постов/час (очень редко)", "0.5"),
+        ("🐢 1 пост/час", "1"),
+        ("🚶 2 поста/час", "2"),
+        ("🏃 3 поста/час", "3"),
+        ("🚀 4 поста/час (активно)", "4"),
+        ("⚡ 6 постов/час (очень активно)", "6"),
+        ("🔥 12 постов/час (максимум)", "12")
+    ]
+    
+    max_sales_rank = new_campaign.get('max_sales_rank', 2000)
+    selected_description = f"Ранг: {max_sales_rank}"
+
+    await callback.message.edit_text(
+        f"<b>ШАГ 9: Частота постинга</b>\n\n"
+        f"Текущий уровень качества: <b>{selected_description}</b>\n\n"
+        "<b>Как часто публиковать товары?</b>\n\n"
+        "Выберите желаемую частоту постинга:",
+        parse_mode="HTML",
+        reply_markup=get_multiselect_keyboard(
+            options=frequency_options,
+            selected_values=selected_list,
+            done_callback="campaign_done_posting_frequency",
+            back_callback="campaign_new_select_sales_rank"
+        )
+    )
+    await callback.answer()

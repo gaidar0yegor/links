@@ -102,7 +102,7 @@ class AmazonProductScraper:
                 # Cache the result
                 self.cache[cache_key] = (product_data, asyncio.get_event_loop().time())
 
-                print(f"DEBUG: Scraped data for ASIN {asin}: price={product_data['price']}, rating={product_data['rating']}, reviews={product_data['review_count']}, sales_rank={product_data['sales_rank']}")
+                # print(f"DEBUG: Scraped data for ASIN {asin}: price={product_data['price']}, rating={product_data['rating']}, reviews={product_data['review_count']}, sales_rank={product_data['sales_rank']}")
 
                 return product_data
 
@@ -148,7 +148,7 @@ class AmazonProductScraper:
                 price_element = soup.select_one(selector)
                 if price_element:
                     price_text = price_element.get_text().strip()
-                    print(f"DEBUG: Found price element with selector '{selector}': '{price_text}'")
+                    # print(f"DEBUG: Found price element with selector '{selector}': '{price_text}'")
 
                     # Extract numeric price - handle both EUR and other formats
                     # Look for patterns like: €29,99 or 29,99 € or 29.99
@@ -166,7 +166,7 @@ class AmazonProductScraper:
                             price_clean = price_str.replace(',', '.')
                             try:
                                 price = float(price_clean)
-                                print(f"DEBUG: Successfully extracted price: €{price}")
+                                # print(f"DEBUG: Successfully extracted price: €{price}")
                                 return {'price': price, 'currency': 'EUR'}
                             except ValueError:
                                 continue
@@ -187,7 +187,7 @@ class AmazonProductScraper:
                                     if price_val:
                                         try:
                                             price = float(str(price_val).replace(',', '.'))
-                                            print(f"DEBUG: Found price in JSON-LD: €{price}")
+                                            # print(f"DEBUG: Found price in JSON-LD: €{price}")
                                             return {'price': price, 'currency': 'EUR'}
                                         except (ValueError, TypeError):
                                             continue
@@ -196,7 +196,7 @@ class AmazonProductScraper:
                                 if price_val:
                                     try:
                                         price = float(str(price_val).replace(',', '.'))
-                                        print(f"DEBUG: Found price in JSON-LD: €{price}")
+                                        # print(f"DEBUG: Found price in JSON-LD: €{price}")
                                         return {'price': price, 'currency': 'EUR'}
                                     except (ValueError, TypeError):
                                         continue
@@ -222,12 +222,12 @@ class AmazonProductScraper:
                                 price_match = re.search(r'(\d+[,.]\d+)', match.replace(',', '.'))
                                 if price_match:
                                     price = float(price_match.group(1).replace(',', '.'))
-                                    print(f"DEBUG: Found price in JavaScript: €{price}")
+                                    # print(f"DEBUG: Found price in JavaScript: €{price}")
                                     return {'price': price, 'currency': 'EUR'}
                             except (ValueError, TypeError):
                                 continue
 
-            print("DEBUG: No price found with any method")
+            # print("DEBUG: No price found with any method")
 
         except Exception as e:
             print(f"DEBUG: Failed to extract price: {e}")
@@ -373,7 +373,7 @@ class AmazonProductScraper:
         )
 
         if needs_scraping:
-            print(f"DEBUG: Missing data for ASIN {asin}, attempting to scrape...")
+            # print(f"DEBUG: Missing data for ASIN {asin}, attempting to scrape...")
             scraped_data = await self.scrape_product_data(asin)
 
             if scraped_data:
@@ -381,7 +381,9 @@ class AmazonProductScraper:
                 for key in ['price', 'rating', 'review_count', 'sales_rank', 'title', 'features', 'description']:
                     if enriched_data.get(key) is None and scraped_data.get(key) is not None:
                         enriched_data[key] = scraped_data[key]
-                        print(f"DEBUG: Filled missing {key} for ASIN {asin}: {scraped_data[key]}")
+                        # print(f"DEBUG: Filled missing {key} for ASIN {asin}: {scraped_data[key]}")
+            
+            print(f"DEBUG: Enriched ASIN {asin} via scraping: Price={enriched_data.get('price')}, Rating={enriched_data.get('rating')}, Reviews={enriched_data.get('review_count')}")
 
         return enriched_data
 

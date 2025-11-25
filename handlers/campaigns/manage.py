@@ -226,7 +226,7 @@ async def toggle_campaign_status(callback: CallbackQuery, state: FSMContext):
     if action == 'run' and campaign_mgr:
         has_timings = await campaign_mgr.has_timings(campaign_id)
         if not has_timings:
-            await callback.answer("⚠️ Невозможно запустить! Сначала установите тайминги (2.4).", show_alert=True)
+            await callback.answer("⚠️ Невозможно запустить! Сначала установите тайминги.", show_alert=True)
             # Переоткрываем меню, чтобы пользователь увидел кнопку таймингов
             await enter_campaign_edit_menu(callback, state)
             return

@@ -173,7 +173,8 @@ class GoogleSheetsAPI:
                     "node_id_category": "2892859031",
                     "subcategory": "Abbigliamento da notte, lingerie e intimo",
                     "subcategory_ru": "Ночное белье, нижнее белье и интим",
-                    "node_id_subcategory": "21695399031"
+                    "node_id_subcategory": "21695399031",
+                    "comission_percent": "12"
                 },
                 {
                     "category": "Apparel",
@@ -181,7 +182,8 @@ class GoogleSheetsAPI:
                     "node_id_category": "2892859031",
                     "subcategory": "Abbigliamento premaman",
                     "subcategory_ru": "Одежда для беременных",
-                    "node_id_subcategory": "1806562031"
+                    "node_id_subcategory": "1806562031",
+                    "comission_percent": "12"
                 }
             ]
 
@@ -190,14 +192,21 @@ class GoogleSheetsAPI:
             categories = []
             for row in data[1:]:  # Skip header
                 if len(row) >= 6:  # category, category_ru, node_id_category, subcategory, subcategory_ru, node_id_subcategory
-                    categories.append({
+                    item = {
                         "category": row[0],
                         "category_ru": row[1],
                         "node_id_category": row[2],
                         "subcategory": row[3],
                         "subcategory_ru": row[4],
                         "node_id_subcategory": row[5]
-                    })
+                    }
+                    # Check for Comission_percent (7th column, index 6)
+                    if len(row) >= 7:
+                         item["comission_percent"] = row[6]
+                    else:
+                         item["comission_percent"] = ""
+                    
+                    categories.append(item)
             return categories
         except Exception as e:
             print(f"Error reading categories_subcategories: {e}")
@@ -216,7 +225,8 @@ class GoogleSheetsAPI:
                 unique_categories[category_key] = {
                     "name": category_display_name,
                     "node_id": item["node_id_category"],
-                    "original_name": item["category"]  # Keep original for mapping
+                    "original_name": item["category"],  # Keep original for mapping
+                    "comission_percent": item.get("comission_percent", "") # Add commission percent
                 }
 
         return list(unique_categories.values())

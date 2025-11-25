@@ -246,8 +246,9 @@ Price: {product_data.get('Price', product_data.get('price', 'N/A'))}{feature_tex
                 f"BASE CONTENT (use this as a style guide):\n{base_content}"
             )
             
-            # Log the full prompt for debugging
-            bot_logger.log_info("ContentGenerator", f"Full LLM prompt:\n{enhanced_prompt}")
+            # Log summary of the prompt for debugging
+            bot_logger.log_info("ContentGenerator", f"Generating content for: {product_data.get('Title', product_data.get('title', 'Unknown'))} (Prompt length: {len(enhanced_prompt)})")
+            # bot_logger.log_info("ContentGenerator", f"Full LLM prompt:\n{enhanced_prompt}")
 
             # Use the LLM to generate the full post
             response = await self.llm_client.rewrite_text(enhanced_prompt, "", language=language, char_limit=800)

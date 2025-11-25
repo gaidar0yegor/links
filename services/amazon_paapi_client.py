@@ -1,5 +1,6 @@
 # services/amazon_paapi_client.py
 import asyncio
+import time
 from typing import Dict, Any, Optional, List
 from config import conf
 from services.logger import bot_logger
@@ -241,8 +242,7 @@ class AmazonPAAPIClient:
                     bot_logger.log_error("AmazonPAAPIClient", e, f"GetItems failed for ASINs: {chunk}")
 
                 # Rate limiting
-                import asyncio
-                asyncio.sleep(0.1)
+                time.sleep(0.1)
 
             return enriched_items
 
@@ -338,6 +338,10 @@ class AmazonPAAPIClient:
             # Try each browse node until we find products
             for node_id in browse_node_ids:
                 try:
+                    # Randomize page to get fresh results
+                    import random
+                    page_num = random.randint(1, 5)
+
                     # Increase item_count to get more variety and filter out excluded ASINs
                     search_items_request = SearchItemsRequest(
                         partner_tag=self.associate_tag,
@@ -346,6 +350,7 @@ class AmazonPAAPIClient:
                         browse_node_id=node_id,
                         keywords=keywords if keywords else None,
                         search_index="All",
+                        item_page=page_num,
                         item_count=10,  # Get more results for variety
                         min_reviews_rating=min_rating_int,
                         # Add price filter to ensure we get products with prices
@@ -357,6 +362,8 @@ class AmazonPAAPIClient:
                             SearchItemsResource.IMAGES_VARIANTS_LARGE, # Request variant images
                             SearchItemsResource.ITEMINFO_FEATURES,
                             SearchItemsResource.ITEMINFO_PRODUCTINFO,
+                            SearchItemsResource.CUSTOMERREVIEWS_COUNT,
+                            SearchItemsResource.CUSTOMERREVIEWS_STARRATING,
                         ],
                     )
 
@@ -381,8 +388,7 @@ class AmazonPAAPIClient:
                                 return product_data
 
                     # Rate limiting between node searches
-                    import asyncio
-                    asyncio.sleep(0.2)
+                    time.sleep(0.8)
 
                 except ApiException as e:
                     bot_logger.log_error("AmazonPAAPIClient",
@@ -424,6 +430,8 @@ class AmazonPAAPIClient:
                     SearchItemsResource.IMAGES_VARIANTS_LARGE, # Request variant images
                     SearchItemsResource.ITEMINFO_FEATURES,
                     SearchItemsResource.ITEMINFO_PRODUCTINFO,
+                    SearchItemsResource.CUSTOMERREVIEWS_COUNT,
+                    SearchItemsResource.CUSTOMERREVIEWS_STARRATING,
                 ],
             )
 
@@ -779,6 +787,10 @@ class AmazonPAAPIClient:
             # Phase 1: Search for candidate products using SearchItems
             for node_id in browse_node_ids:
                 try:
+                    # Randomize page to get fresh results
+                    import random
+                    page_num = random.randint(1, 5)
+                    
                     # Create search request
                     search_request = SearchItemsRequest(
                         partner_tag=self.associate_tag,
@@ -786,6 +798,7 @@ class AmazonPAAPIClient:
                         marketplace="www.amazon.it",
                         browse_node_id=node_id,
                         search_index="All",
+                        item_page=page_num,
                         item_count=min(max_results * 2, 10),  # Get more candidates for filtering
                         sort_by="Featured",
                         resources=[
@@ -813,7 +826,7 @@ class AmazonPAAPIClient:
 
                     # Rate limiting between requests
                     import time
-                    time.sleep(0.2)
+                    time.sleep(0.8)
 
                 except ApiException as e:
                     print(f"DEBUG: API Exception for browse node {node_id}: {e.reason}")
@@ -835,24 +848,41 @@ class AmazonPAAPIClient:
             # Phase 3: Filter and return products that meet criteria
             print(f"DEBUG: Starting final filtering for {len(enriched_products)} products...")
             filtered_products = []
+            
+            # Statistics counters
+            stats = {
+                "total": len(enriched_products),
+                "accepted": 0,
+                "skipped_rating": 0,
+                "skipped_rank": 0,
+                "skipped_other": 0
+            }
+            
             for product in enriched_products:
                 asin = product.get('asin', 'N/A')
 
                 # Apply rating filter
                 rating = product.get('rating')
                 if min_rating and (rating is None or rating < min_rating):
-                    print(f"DEBUG: Skipping product {asin} - rating '{rating}' is below minimum '{min_rating}'")
+                    # print(f"DEBUG: Skipping product {asin} - rating '{rating}' is below minimum '{min_rating}'")
+                    stats["skipped_rating"] += 1
                     continue
 
                 # Apply sales rank filter
                 sales_rank = product.get('sales_rank')
                 if max_sales_rank and (sales_rank is None or sales_rank > max_sales_rank):
-                    print(f"DEBUG: Skipping product {asin} - sales rank '{sales_rank}' is above maximum '{max_sales_rank}'")
+                    # print(f"DEBUG: Skipping product {asin} - sales rank '{sales_rank}' is above maximum '{max_sales_rank}'")
+                    stats["skipped_rank"] += 1
                     continue
 
                 filtered_products.append(product)
+                stats["accepted"] += 1
                 if len(filtered_products) >= max_results:
                     break
+            
+            # Log summary instead of individual skips
+            print(f"DEBUG: Filtering Summary: Total={stats['total']}, Accepted={stats['accepted']}, "
+                  f"Skipped[Rating]={stats['skipped_rating']}, Skipped[Rank]={stats['skipped_rank']}")
 
             print(f"DEBUG: Returning {len(filtered_products)} enriched and filtered products")
             return filtered_products
@@ -913,7 +943,7 @@ class AmazonPAAPIClient:
                             )
 
                             if needs_scraping:
-                                print(f"DEBUG: API data incomplete for ASIN {enriched_data.get('asin')}, using web scraping fallback")
+                                # print(f"DEBUG: API data incomplete for ASIN {enriched_data.get('asin')}, using web scraping fallback")
                                 try:
                                     from services.amazon_scraper import enrich_product_with_scraping
                                     enriched_data = await enrich_product_with_scraping(enriched_data)
@@ -923,7 +953,7 @@ class AmazonPAAPIClient:
                             enriched_products.append(enriched_data)
 
                 # Rate limiting between batches
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(0.8)
 
             except ApiException as e:
                 print(f"DEBUG: GetItems API Exception for batch {batch_asins[:3]}...: {e.reason}")
@@ -997,7 +1027,7 @@ class AmazonPAAPIClient:
                         product_data['features'] = features
                         # Use first 2-3 features as description
                         product_data['description'] = ' '.join(features[:3]) if features else ''
-                        print(f"DEBUG: Extracted {len(features)} features from API for ASIN {asin}")
+                        # print(f"DEBUG: Extracted {len(features)} features from API for ASIN {asin}")
 
             # Extract price and discount
             if hasattr(item, 'offers') and item.offers:
@@ -1177,7 +1207,7 @@ class AmazonPAAPIClient:
                         product_data['image_url'] = getattr(item.images.primary.large, 'url', '')
 
             # Debug logging
-            print(f"DEBUG: Extracted product {asin}: rating={product_data['rating']}, reviews={product_data['review_count']}, sales_rank={product_data['sales_rank']}")
+            # print(f"DEBUG: Extracted product {asin}: rating={product_data['rating']}, reviews={product_data['review_count']}, sales_rank={product_data['sales_rank']}")
 
             return product_data
 
