@@ -711,8 +711,10 @@ class CampaignManager:
                     continue
 
                 # Apply review count filter (new feature)
-                review_count = product.get('review_count', 0)
-                if min_review_count > 0 and review_count < min_review_count:
+                review_count = product.get('review_count')
+                # Handle None case for review_count
+                current_reviews = int(review_count) if review_count is not None else 0
+                if min_review_count > 0 and current_reviews < min_review_count:
                     continue
 
                 # Prepare product data
