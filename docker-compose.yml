@@ -13,6 +13,8 @@ services:
       - db
     env_file:
       - .env # Используем файл .env для переменных окружения (токен, ключи БД)
+    environment:
+      - TZ=Europe/Rome
     volumes:
       # Для логирования и других временных файлов, если нужно
       - bot_logs:/app/logs

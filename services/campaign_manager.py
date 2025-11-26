@@ -178,7 +178,7 @@ class CampaignManager:
         """Получает активные кампании (status='running') вместе с их таймингами."""
 
         # 1. Запрос активных кампаний (сортировка по ID для консистентности)
-        campaigns_query = "SELECT id, name, params, min_review_count FROM campaigns WHERE status = 'running' ORDER BY id;"
+        campaigns_query = "SELECT id, name, params, min_review_count, posting_frequency, last_post_time FROM campaigns WHERE status = 'running' ORDER BY id;"
         async with self.db_pool.acquire() as conn:
             campaign_records = await conn.fetch(campaigns_query)
 
@@ -689,7 +689,7 @@ class CampaignManager:
                 min_price=params.get('min_price'),
                 fulfilled_by_amazon=params.get('fulfilled_by_amazon'),
                 max_sales_rank=params.get('max_sales_rank', 10000),
-                max_results=min(limit * 2, 50)  # Get more results to filter from
+                max_results=min(limit * 5, 200)  # Get more results to filter from, up to 200
             )
 
             if not search_results:

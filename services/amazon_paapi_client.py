@@ -870,10 +870,32 @@ class AmazonPAAPIClient:
 
                 # Apply sales rank filter
                 sales_rank = product.get('sales_rank')
+                review_count = product.get('review_count', 0)
+                
                 if max_sales_rank and (sales_rank is None or sales_rank > max_sales_rank):
-                    # print(f"DEBUG: Skipping product {asin} - sales rank '{sales_rank}' is above maximum '{max_sales_rank}'")
-                    stats["skipped_rank"] += 1
-                    continue
+                    # If rank is None, only keep if it has high social proof (reviews > 500)
+                    if sales_rank is None:
+                        try:
+                            rc = int(review_count) if review_count else 0
+                        except:
+                            rc = 0
+                            
+                        if rc < 500:  # Threshold for keeping unranked items
+                            stats["skipped_rank"] += 1
+                            if stats["skipped_rank"] <= 3:
+                                print(f"DEBUG: Skipping {asin} - No rank and low reviews ({rc})")
+                            continue
+                        else:
+                            # print(f"DEBUG: Keeping {asin} despite missing rank (High reviews: {rc})")
+                            pass
+                    else:
+                        # Rank exists but is too high
+                        # print(f"DEBUG: Skipping product {asin} - sales rank '{sales_rank}' is above maximum '{max_sales_rank}'")
+                        stats["skipped_rank"] += 1
+                        # Log first few skipped products for debugging
+                        if stats["skipped_rank"] <= 3:
+                            print(f"DEBUG: Skipping {asin} - sales rank '{sales_rank}' > {max_sales_rank}")
+                        continue
 
                 filtered_products.append(product)
                 stats["accepted"] += 1

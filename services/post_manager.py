@@ -510,7 +510,11 @@ class PostManager:
                         await self.bot.send_media_group(chat_id=channel_name, media=media_group)
 
                 successful_posts += 1
-                print(f"✅ Posted to {channel_name} for campaign {campaign['name']}")
+                # Extract sales rank for logging
+                sales_rank = product_data.get('SalesRank') or product_data.get('sales_rank')
+                asin = product_data.get('ASIN') or product_data.get('asin', 'Unknown')
+                rank_info = f" (rank: {sales_rank})" if sales_rank else ""
+                print(f"✅ Posted {asin} to {channel_name} for campaign {campaign['name']}{rank_info}")
 
             except Exception as e:
                 error_msg = f"❌ Не удалось опубликовать в {channel_name} для кампании '{campaign['name']}': {e}"
@@ -718,7 +722,11 @@ class PostManager:
                         await self.bot.send_media_group(chat_id=channel_name, media=media_group)
 
                 successful_posts += 1
-                print(f"✅ Posted queued product to {channel_name} for campaign {campaign['name']}")
+                # Extract sales rank for logging
+                sales_rank = formatted_product_data.get('SalesRank') or formatted_product_data.get('sales_rank') or product_data.get('sales_rank')
+                asin = formatted_product_data.get('ASIN') or formatted_product_data.get('asin') or product_data.get('asin', 'Unknown')
+                rank_info = f" (rank: {sales_rank})" if sales_rank else ""
+                print(f"✅ Posted queued product {asin} to {channel_name} for campaign {campaign['name']}{rank_info}")
 
             except Exception as e:
                 error_msg = f"❌ Не удалось опубликовать продукт из очереди в {channel_name} для кампании '{campaign['name']}': {e}"

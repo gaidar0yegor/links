@@ -3,6 +3,9 @@ import gspread
 from google.oauth2.service_account import Credentials
 from config import conf # Используем конфигурацию из config.py
 from gspread.exceptions import WorksheetNotFound, SpreadsheetNotFound
+import pandas as pd
+from typing import Union, List
+import io # Imported at top level
 
 class GoogleSheetsAPI:
     """Класс для работы с Google Sheets через сервисный аккаунт."""
@@ -247,6 +250,149 @@ class GoogleSheetsAPI:
                 })
 
         return subcategories
+
+    def upload_csv_to_sheet(self, sheet_name: str, csv_content: Union[str, pd.DataFrame], max_columns: int = None) -> bool:
+        """
+        Загружает содержимое CSV (или DataFrame) в указанный лист Google Sheets.
+        Очищает только колонки с данными (A-M), сохраняя формулы в N-Z.
+        
+        Args:
+            sheet_name: Имя листа (например, 'statistics_clicks' или 'statistics_orders')
+            csv_content: Содержимое CSV в виде строки или pandas DataFrame
+            max_columns: Максимальное количество колонок для загрузки (и очистки). 
+                         Если CSV шире, лишние колонки будут обрезаны.
+            
+        Returns:
+            True если успешно, False если ошибка
+        """
+        if not self.available:
+            print(f"⚠️ Google Sheets API not available. Skipping upload to {sheet_name}")
+            return False
+
+        try:
+            worksheet = self.spreadsheet.worksheet(sheet_name)
+            
+            # Prepare data
+            df = None
+            if isinstance(csv_content, pd.DataFrame):
+                df = csv_content
+            else:
+                # Assuming csv_content is a string
+                import csv
+                
+                content_io = io.StringIO(csv_content)
+                lines = content_io.readlines()
+                
+                if not lines:
+                    print(f"⚠️ Empty CSV content")
+                    return True
+
+                # Heuristic to find the header row and separator
+                start_row = 0
+                sep = ','
+                max_cols = 0
+                
+                # Check first 20 lines to find the best separator and header row
+                for i, line in enumerate(lines[:20]):
+                    # Count potential separators
+                    commas = line.count(',')
+                    semicolons = line.count(';')
+                    tabs = line.count('\t')
+                    
+                    # Find the max separators
+                    current_max = max(commas, semicolons, tabs)
+                    
+                    if current_max > max_cols:
+                        max_cols = current_max
+                        start_row = i
+                        if commas == current_max:
+                            sep = ','
+                        elif semicolons == current_max:
+                            sep = ';'
+                        elif tabs == current_max:
+                            sep = '\t'
+                
+                print(f"📊 Detected CSV format: start_row={start_row}, sep='{sep}'")
+                
+                # Reset pointer
+                content_io.seek(0)
+                
+                # Read with detected settings
+                try:
+                    df = pd.read_csv(content_io, sep=sep, skiprows=start_row)
+                except Exception as parse_error:
+                    print(f"⚠️ Pandas parsing failed, trying python engine: {parse_error}")
+                    content_io.seek(0)
+                    df = pd.read_csv(content_io, sep=sep, skiprows=start_row, engine='python')
+
+            if df is None:
+                print(f"⚠️ Failed to parse CSV data")
+                return False
+            
+            # Slice dataframe to max_columns if provided
+            if max_columns is not None:
+                print(f"✂️ Limiting columns to {max_columns}")
+                df = df.iloc[:, :max_columns]
+
+            # Format numeric columns
+            if not df.empty:
+                for col in df.columns:
+                    # Only attempt conversion if object/string type
+                    if df[col].dtype == 'object':
+                        try:
+                            cleaned_col = df[col].astype(str).str.replace('€', '').str.replace('$', '').str.strip()
+                            
+                            # Check if it looks like EU number format
+                            if cleaned_col.str.contains(',').any():
+                                converted = cleaned_col.str.replace('.', '').str.replace(',', '.')
+                                df[col] = pd.to_numeric(converted, errors='ignore')
+                            else:
+                                df[col] = pd.to_numeric(cleaned_col, errors='ignore')
+                        except Exception:
+                            pass 
+
+            # Convert to list of lists for upload
+            data_to_upload = df.where(pd.notnull(df), '').values.tolist()
+
+            if not data_to_upload:
+                print(f"⚠️ No data to upload to {sheet_name}")
+                return True
+
+            # Calculate range to clear based on data width
+            # Assuming we clear columns A up to the width of the new data
+            num_rows = 50000  # Safe upper limit
+            num_cols = len(df.columns)
+            
+            # Convert column number to letter (1 -> A, 2 -> B, etc.)
+            # Simple implementation for A-Z (1-26) which covers our case (M is 13)
+            if num_cols <= 26:
+                end_col_letter = chr(ord('A') + num_cols - 1)
+            else:
+                # Fallback for wider tables (AA, AB, etc.) - unlikely here but safe default
+                end_col_letter = 'M' 
+
+            clear_range = f'A2:{end_col_letter}{num_rows}'
+            print(f"🧹 Clearing range {clear_range} to preserve formulas in later columns")
+
+            # Clear ONLY the data columns, preserving formulas in N, O, P...
+            try:
+                worksheet.batch_clear([clear_range])
+            except Exception as e:
+                print(f"⚠️ Error clearing sheet {sheet_name}: {e}")
+                pass
+
+            # Append new data starting from row 2
+            worksheet.update(range_name='A2', values=data_to_upload, value_input_option='USER_ENTERED')
+            
+            print(f"✅ Successfully uploaded {len(data_to_upload)} rows to {sheet_name}")
+            return True
+
+        except WorksheetNotFound:
+            print(f"❌ Worksheet '{sheet_name}' not found. Please create it first.")
+            return False
+        except Exception as e:
+            print(f"❌ Error uploading to {sheet_name}: {e}")
+            return False
 
 # Создай глобальный экземпляр для использования в хэндлерах
 sheets_api = GoogleSheetsAPI()

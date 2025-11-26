@@ -1,6 +1,7 @@
 # services/scheduler.py
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from services.campaign_manager import CampaignManager, campaign_manager
 from services.post_manager import PostManager
 from services.amazon_paapi_client import AmazonPAAPIClient
@@ -8,8 +9,8 @@ from services.amazon_paapi_client import AmazonPAAPIClient
 class CampaignScheduler:
     """Управляет планировщиком задач (APScheduler) для автопостинга."""
     def __init__(self, bot, db_pool, campaign_manager):
-        # Инициализируем планировщик
-        self.scheduler = AsyncIOScheduler()
+        # Инициализируем планировщик с таймзоной Италии
+        self.scheduler = AsyncIOScheduler(timezone=ZoneInfo("Europe/Rome"))
         self.bot = bot
         self.campaign_manager = campaign_manager
         self.post_manager = PostManager(bot=bot) # Инициализация PostManager
@@ -51,7 +52,9 @@ class CampaignScheduler:
 
     async def main_posting_cycle(self):
         """Главный цикл, который проверяет тайминги, конфликты и запускает посты."""
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] Запущен цикл автопостинга...")
+        italy_tz = ZoneInfo("Europe/Rome")
+        now_italy = datetime.now(italy_tz)
+        print(f"[{now_italy.strftime('%H:%M:%S')}] Запущен цикл автопостинга (Rome Time)...")
 
         # 1. Получаем список активных кампаний
         active_campaigns = await self.campaign_manager.get_active_campaigns_with_timings()
@@ -61,8 +64,8 @@ class CampaignScheduler:
             return
 
         # 2. Проверяем все активные кампании и запускаем те, которые соответствуют текущему времени
-        current_time = datetime.now().time()
-        current_day = datetime.now().weekday() # 0 = Пн, 6 = Вс
+        current_time = now_italy.time()
+        current_day = now_italy.weekday() # 0 = Пн, 6 = Вс
 
         campaigns_to_run = []
 
@@ -87,7 +90,13 @@ class CampaignScheduler:
                 min_interval_seconds = (3600 / posting_frequency)  # seconds between posts
 
                 # Проверяем, прошло ли достаточно времени с последнего поста
-                time_since_last_post = (datetime.now() - last_post_time).total_seconds()
+                # Приводим last_post_time к той же таймзоне, что и now_italy
+                if last_post_time.tzinfo is None:
+                     # Если из БД пришло naive время, считаем его UTC (по умолчанию в Postgres/Docker)
+                     from datetime import timezone
+                     last_post_time = last_post_time.replace(tzinfo=timezone.utc)
+                
+                time_since_last_post = (now_italy - last_post_time.astimezone(italy_tz)).total_seconds()
 
                 if time_since_last_post < min_interval_seconds:
                     remaining_minutes = (min_interval_seconds - time_since_last_post) / 60
@@ -189,7 +198,9 @@ class CampaignScheduler:
 
     async def product_discovery_cycle(self):
         """Автоматическое обнаружение и добавление продуктов в очередь."""
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔍 Запущен цикл обнаружения продуктов...")
+        italy_tz = ZoneInfo("Europe/Rome")
+        now_italy = datetime.now(italy_tz)
+        print(f"[{now_italy.strftime('%H:%M:%S')}] 🔍 Запущен цикл обнаружения продуктов (Rome Time)...")
 
         # Инициализируем Amazon PA API клиент
         amazon_client = AmazonPAAPIClient()

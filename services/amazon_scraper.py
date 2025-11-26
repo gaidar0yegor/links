@@ -383,7 +383,9 @@ class AmazonProductScraper:
                         enriched_data[key] = scraped_data[key]
                         # print(f"DEBUG: Filled missing {key} for ASIN {asin}: {scraped_data[key]}")
             
-            print(f"DEBUG: Enriched ASIN {asin} via scraping: Price={enriched_data.get('price')}, Rating={enriched_data.get('rating')}, Reviews={enriched_data.get('review_count')}")
+            sales_rank = enriched_data.get('sales_rank')
+            rank_info = f", Rank={sales_rank}" if sales_rank else ", Rank=None"
+            print(f"DEBUG: Enriched ASIN {asin} via scraping: Price={enriched_data.get('price')}, Rating={enriched_data.get('rating')}, Reviews={enriched_data.get('review_count')}{rank_info}")
 
         return enriched_data
 
