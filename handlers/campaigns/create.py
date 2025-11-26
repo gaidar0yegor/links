@@ -456,13 +456,12 @@ async def select_fba(callback: CallbackQuery, state: FSMContext):
 
     await state.set_state(CampaignStates.campaign_new_select_sales_rank)
 
-    # Sales rank quality options (1-5 buttons)
+    # Sales rank quality options (1-4 buttons)
     sales_rank_options = [
-        ("🏆 Ранг 1: 1-250 (Элитные топ товары)", "250"),
-        ("🥈 Ранг 2: 251-500 (Очень популярные)", "500"),
-        ("🥉 Ранг 3: 501-1000 (Популярные)", "1000"),
-        ("⭐ Ранг 4: 1001-2000 (Хорошие)", "2000"),
-        ("📈 Ранг 5: 2000+ (Расширенный выбор)", "100000")
+        ("🏆 Ранг 1: 1-500", "500"),
+        ("🥈 Ранг 2: 500-1000", "1000"),
+        ("🥉 Ранг 3: 1000-2000", "2000"),
+        ("⭐ Ранг 4: 2000-5000", "5000")
     ]
 
     keyboard_buttons = []
@@ -501,11 +500,10 @@ async def process_sales_rank_selection(callback: CallbackQuery, state: FSMContex
 
     # Map rank to readable description for logging
     rank_descriptions = {
-        250: "Ранг 1 (1-250)",
-        500: "Ранг 2 (251-500)",
-        1000: "Ранг 3 (501-1000)",
-        2000: "Ранг 4 (1001-2000)",
-        100000: "Ранг 5 (2000+)"
+        500: "Ранг 1 (1-500)",
+        1000: "Ранг 2 (500-1000)",
+        2000: "Ранг 3 (1000-2000)",
+        5000: "Ранг 4 (2000-5000)"
     }
     selected_description = rank_descriptions.get(rank_value, f"Кастомный ({rank_value})")
 
@@ -731,11 +729,10 @@ async def input_campaign_name(message: Message, state: FSMContext):
 
     # Map sales rank to readable description
     rank_descriptions = {
-        250: "Ранг 1 (1-250)",
-        500: "Ранг 2 (251-500)",
-        1000: "Ранг 3 (501-1000)",
-        2000: "Ранг 4 (1001-2000)",
-        100000: "Ранг 5 (2000+)"
+        500: "Ранг 1 (1-500)",
+        1000: "Ранг 2 (500-1000)",
+        2000: "Ранг 3 (1000-2000)",
+        5000: "Ранг 4 (2000-5000)"
     }
     max_sales_rank = new_campaign.get('max_sales_rank')
     sales_rank_display = rank_descriptions.get(max_sales_rank, f"Кастомный ({max_sales_rank})") if max_sales_rank else "Не выбран"
@@ -1163,13 +1160,12 @@ async def go_back_to_sales_rank(callback: CallbackQuery, state: FSMContext):
     """Возврат к выбору Sales Rank (Шаг 8)."""
     await state.set_state(CampaignStates.campaign_new_select_sales_rank)
     
-    # Sales rank quality options (1-5 buttons)
+    # Sales rank quality options (1-4 buttons)
     sales_rank_options = [
-        ("🏆 Ранг 1: 1-250 (Элитные топ товары)", "250"),
-        ("🥈 Ранг 2: 251-500 (Очень популярные)", "500"),
-        ("🥉 Ранг 3: 501-1000 (Популярные)", "1000"),
-        ("⭐ Ранг 4: 1001-2000 (Хорошие)", "2000"),
-        ("📈 Ранг 5: 2000+ (Расширенный выбор)", "100000")
+        ("🏆 Ранг 1: 1-500", "500"),
+        ("🥈 Ранг 2: 500-1000", "1000"),
+        ("🥉 Ранг 3: 1000-2000", "2000"),
+        ("⭐ Ранг 4: 2000-5000", "5000")
     ]
 
     keyboard_buttons = []
