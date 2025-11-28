@@ -237,29 +237,88 @@ class AmazonProductScraper:
     def _extract_rating_reviews(self, soup: BeautifulSoup) -> Dict[str, Any]:
         """Extract rating and review count."""
         try:
-            # Look for rating
-            rating_element = soup.select_one('#averageCustomerReviews .a-icon-star .a-icon-alt')
-            if not rating_element:
-                rating_element = soup.select_one('.a-icon-star .a-icon-alt')
-
+            # --- RATING EXTRACTION ---
             rating = None
-            if rating_element:
-                rating_text = rating_element.get_text()
-                rating_match = re.search(r'(\d+[,.]\d+)', rating_text.replace(',', '.'))
-                if rating_match:
-                    rating = float(rating_match.group(1).replace(',', '.'))
+            
+            # List of selectors to try for rating
+            rating_selectors = [
+                '#averageCustomerReviews .a-icon-star .a-icon-alt',
+                '#acrPopover .a-icon-alt',
+                '.reviewCountTextLinkedHistogram .a-icon-alt',
+                '.a-icon-star .a-icon-alt',
+                '#reviewsMedley .a-icon-alt',
+            ]
 
-            # Look for review count
-            review_element = soup.select_one('#acrCustomerReviewText')
-            if not review_element:
-                review_element = soup.select_one('.a-size-base .a-link-normal')
+            for selector in rating_selectors:
+                element = soup.select_one(selector)
+                if element:
+                    text = element.get_text().strip()
+                    # Match patterns like "4,4 su 5 stelle" or "4.4 out of 5 stars"
+                    match = re.search(r'(\d+[,.]\d+)', text.replace(',', '.'))
+                    if match:
+                        try:
+                            val = float(match.group(1).replace(',', '.'))
+                            if 0 <= val <= 5:
+                                rating = val
+                                break
+                        except ValueError:
+                            continue
 
+            # Fallback: Search for rating text pattern in the whole page content if no selector matched
+            if rating is None:
+                # Look for "4,4 su 5 stelle" pattern directly in text nodes
+                # Use a more specific regex to avoid false positives (like dates or prices)
+                text_pattern = re.compile(r'(\d+[,.]\d+)\s+su\s+5\s+stelle', re.IGNORECASE)
+                found = soup.find(string=text_pattern)
+                if found:
+                    match = text_pattern.search(found)
+                    if match:
+                        try:
+                            val = float(match.group(1).replace(',', '.'))
+                            if 0 <= val <= 5:
+                                rating = val
+                        except ValueError:
+                            pass
+
+            # --- REVIEW COUNT EXTRACTION ---
             review_count = None
-            if review_element:
-                review_text = review_element.get_text()
-                review_match = re.search(r'(\d+(?:[.,]\d+)*)', review_text.replace(',', '').replace('.', ''))
-                if review_match:
-                    review_count = int(review_match.group(1).replace(',', '').replace('.', ''))
+            
+            # List of selectors to try for review count
+            review_selectors = [
+                '#acrCustomerReviewText',
+                '#acrCustomerReviewLink',
+                '.a-size-base .a-link-normal',  # Generic link often used for reviews
+                'span[data-hook="total-review-count"]',
+            ]
+
+            for selector in review_selectors:
+                element = soup.select_one(selector)
+                if element:
+                    text = element.get_text().strip()
+                    # Match integer numbers, ignoring dots/commas as thousands separators
+                    # "845 voti", "1.200 ratings"
+                    match = re.search(r'(\d+(?:[.,]\d+)*)', text.replace(',', '').replace('.', ''))
+                    if match:
+                        try:
+                            # Check if text actually looks like a review count (contains "voti", "ratings", "reviews")
+                            if any(k in text.lower() for k in ['voti', 'ratings', 'reviews', 'recensioni']):
+                                val = int(match.group(1).replace(',', '').replace('.', ''))
+                                review_count = val
+                                break
+                        except ValueError:
+                            continue
+            
+            # Fallback: Search for "X voti" pattern
+            if review_count is None:
+                text_pattern = re.compile(r'(\d+(?:[.,]\d+)*)\s+voti', re.IGNORECASE)
+                found = soup.find(string=text_pattern)
+                if found:
+                    match = text_pattern.search(found)
+                    if match:
+                        try:
+                            review_count = int(match.group(1).replace(',', '').replace('.', ''))
+                        except ValueError:
+                            pass
 
             # If no reviews found, rating cannot be valid (avoids false positives from ads/recommendations)
             if not review_count:

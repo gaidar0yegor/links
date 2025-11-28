@@ -178,7 +178,8 @@ class CampaignManager:
         """Получает активные кампании (status='running') вместе с их таймингами."""
 
         # 1. Запрос активных кампаний (сортировка по ID для консистентности)
-        campaigns_query = "SELECT id, name, params, min_review_count FROM campaigns WHERE status = 'running' ORDER BY id;"
+        # ДОБАВЛЕНО: posting_frequency, last_post_time для корректной работы шедулера
+        campaigns_query = "SELECT id, name, params, min_review_count, posting_frequency, last_post_time FROM campaigns WHERE status = 'running' ORDER BY id;"
         async with self.db_pool.acquire() as conn:
             campaign_records = await conn.fetch(campaigns_query)
 

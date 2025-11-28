@@ -878,10 +878,15 @@ class AmazonPAAPIClient:
                 if sales_rank is None and min_review_count > 0 and review_count is not None:
                     if review_count >= (min_review_count * 2):
                         bypass_rank_check = True
-                        # print(f"DEBUG: Bypassing missing sales rank for {asin} (Reviews: {review_count} >= {min_review_count * 2})")
+                        print(f"DEBUG: Bypassing missing sales rank for {asin} (Reviews: {review_count} >= {min_review_count * 2})")
 
                 if not bypass_rank_check and max_sales_rank and (sales_rank is None or sales_rank > max_sales_rank):
-                    # print(f"DEBUG: Skipping product {asin} - sales rank '{sales_rank}' is above maximum '{max_sales_rank}'")
+                    if sales_rank:
+                        print(f"DEBUG: Skipping product {asin} - sales rank '{sales_rank}' is above maximum '{max_sales_rank}'")
+                    else:
+                        # Only log if not bypassed
+                        pass 
+                        # print(f"DEBUG: Skipping product {asin} - missing sales rank")
                     stats["skipped_rank"] += 1
                     continue
 
