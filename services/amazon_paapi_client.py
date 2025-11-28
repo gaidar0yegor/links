@@ -757,7 +757,8 @@ class AmazonPAAPIClient:
     async def search_items_enhanced(self, browse_node_ids: List[str], min_rating: float = 0.0,
                                    min_price: Optional[float] = None,
                                    fulfilled_by_amazon: Optional[bool] = None, max_results: int = 10,
-                                   max_sales_rank: Optional[int] = None) -> List[Dict[str, Any]]:
+                                   max_sales_rank: Optional[int] = None,
+                                   min_review_count: int = 0) -> List[Dict[str, Any]]:
         """
         Enhanced search that returns multiple products with sales rank information.
         Uses GetItems API to enrich data with ratings, reviews, and sales rank.
@@ -835,8 +836,8 @@ class AmazonPAAPIClient:
                     print(f"DEBUG: Exception for browse node {node_id}: {e}")
                     continue
 
-            # Remove duplicates and limit candidates
-            candidate_asins = list(set(candidate_asins))[:max_results * 2]
+            # Remove duplicates (process all candidates to maximize results)
+            candidate_asins = list(set(candidate_asins))
 
             if not candidate_asins:
                 print("DEBUG: No candidate ASINs found")
@@ -868,34 +869,21 @@ class AmazonPAAPIClient:
                     stats["skipped_rating"] += 1
                     continue
 
-                # Apply sales rank filter
+                # Apply sales rank filter with bypass logic
                 sales_rank = product.get('sales_rank')
-                review_count = product.get('review_count', 0)
+                review_count = product.get('review_count')
                 
-                if max_sales_rank and (sales_rank is None or sales_rank > max_sales_rank):
-                    # If rank is None, only keep if it has high social proof (reviews > 500)
-                    if sales_rank is None:
-                        try:
-                            rc = int(review_count) if review_count else 0
-                        except:
-                            rc = 0
-                            
-                        if rc < 500:  # Threshold for keeping unranked items
-                            stats["skipped_rank"] += 1
-                            if stats["skipped_rank"] <= 3:
-                                print(f"DEBUG: Skipping {asin} - No rank and low reviews ({rc})")
-                            continue
-                        else:
-                            # print(f"DEBUG: Keeping {asin} despite missing rank (High reviews: {rc})")
-                            pass
-                    else:
-                        # Rank exists but is too high
-                        # print(f"DEBUG: Skipping product {asin} - sales rank '{sales_rank}' is above maximum '{max_sales_rank}'")
-                        stats["skipped_rank"] += 1
-                        # Log first few skipped products for debugging
-                        if stats["skipped_rank"] <= 3:
-                            print(f"DEBUG: Skipping {asin} - sales rank '{sales_rank}' > {max_sales_rank}")
-                        continue
+                bypass_rank_check = False
+                # If sales rank is missing BUT review count is high enough (2x min required), accept it
+                if sales_rank is None and min_review_count > 0 and review_count is not None:
+                    if review_count >= (min_review_count * 2):
+                        bypass_rank_check = True
+                        # print(f"DEBUG: Bypassing missing sales rank for {asin} (Reviews: {review_count} >= {min_review_count * 2})")
+
+                if not bypass_rank_check and max_sales_rank and (sales_rank is None or sales_rank > max_sales_rank):
+                    # print(f"DEBUG: Skipping product {asin} - sales rank '{sales_rank}' is above maximum '{max_sales_rank}'")
+                    stats["skipped_rank"] += 1
+                    continue
 
                 filtered_products.append(product)
                 stats["accepted"] += 1

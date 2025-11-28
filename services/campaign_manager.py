@@ -178,7 +178,7 @@ class CampaignManager:
         """Получает активные кампании (status='running') вместе с их таймингами."""
 
         # 1. Запрос активных кампаний (сортировка по ID для консистентности)
-        campaigns_query = "SELECT id, name, params, min_review_count, posting_frequency, last_post_time FROM campaigns WHERE status = 'running' ORDER BY id;"
+        campaigns_query = "SELECT id, name, params, min_review_count FROM campaigns WHERE status = 'running' ORDER BY id;"
         async with self.db_pool.acquire() as conn:
             campaign_records = await conn.fetch(campaigns_query)
 
@@ -648,7 +648,7 @@ class CampaignManager:
             count = await conn.fetchval(query, campaign_id)
             return count or 0
 
-    async def populate_queue_for_campaign(self, campaign_id: int, limit: int = 20):
+    async def populate_queue_for_campaign(self, campaign_id: int, limit: int = 200):
         """
         Immediately populate the product queue for a newly created campaign.
         This addresses the issue where campaigns previously waited 6 hours.
@@ -689,7 +689,8 @@ class CampaignManager:
                 min_price=params.get('min_price'),
                 fulfilled_by_amazon=params.get('fulfilled_by_amazon'),
                 max_sales_rank=params.get('max_sales_rank', 10000),
-                max_results=min(limit * 5, 200)  # Get more results to filter from, up to 200
+                min_review_count=campaign.get('min_review_count', 0),
+                max_results=min(limit * 2, 50)  # Get more results to filter from
             )
 
             if not search_results:
@@ -711,10 +712,8 @@ class CampaignManager:
                     continue
 
                 # Apply review count filter (new feature)
-                review_count = product.get('review_count')
-                # Handle None case for review_count
-                current_reviews = int(review_count) if review_count is not None else 0
-                if min_review_count > 0 and current_reviews < min_review_count:
+                review_count = product.get('review_count', 0)
+                if min_review_count > 0 and review_count < min_review_count:
                     continue
 
                 # Prepare product data

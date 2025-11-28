@@ -261,6 +261,10 @@ class AmazonProductScraper:
                 if review_match:
                     review_count = int(review_match.group(1).replace(',', '').replace('.', ''))
 
+            # If no reviews found, rating cannot be valid (avoids false positives from ads/recommendations)
+            if not review_count:
+                rating = None
+
             return {'rating': rating, 'review_count': review_count}
 
         except Exception as e:
@@ -383,9 +387,7 @@ class AmazonProductScraper:
                         enriched_data[key] = scraped_data[key]
                         # print(f"DEBUG: Filled missing {key} for ASIN {asin}: {scraped_data[key]}")
             
-            sales_rank = enriched_data.get('sales_rank')
-            rank_info = f", Rank={sales_rank}" if sales_rank else ", Rank=None"
-            print(f"DEBUG: Enriched ASIN {asin} via scraping: Price={enriched_data.get('price')}, Rating={enriched_data.get('rating')}, Reviews={enriched_data.get('review_count')}{rank_info}")
+            print(f"DEBUG: Enriched ASIN {asin} via scraping: Price={enriched_data.get('price')}, Rating={enriched_data.get('rating')}, Reviews={enriched_data.get('review_count')}")
 
         return enriched_data
 

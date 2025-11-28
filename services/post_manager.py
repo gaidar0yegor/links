@@ -219,7 +219,8 @@ class PostManager:
                             min_price=params.get('min_price'),
                             fulfilled_by_amazon=params.get('fulfilled_by_amazon'),
                             max_sales_rank=params.get('max_sales_rank'),
-                            max_results=20  # Get up to 20 products for variety
+                            min_review_count=params.get('min_review_count', 0),
+                            max_results=5  # Reduced from 20 to 5 for emergency post to save resources
                         )
                         print(f"DEBUG: Enhanced search completed without exception")
                     except Exception as e:
@@ -510,11 +511,7 @@ class PostManager:
                         await self.bot.send_media_group(chat_id=channel_name, media=media_group)
 
                 successful_posts += 1
-                # Extract sales rank for logging
-                sales_rank = product_data.get('SalesRank') or product_data.get('sales_rank')
-                asin = product_data.get('ASIN') or product_data.get('asin', 'Unknown')
-                rank_info = f" (rank: {sales_rank})" if sales_rank else ""
-                print(f"✅ Posted {asin} to {channel_name} for campaign {campaign['name']}{rank_info}")
+                print(f"✅ Posted to {channel_name} for campaign {campaign['name']}")
 
             except Exception as e:
                 error_msg = f"❌ Не удалось опубликовать в {channel_name} для кампании '{campaign['name']}': {e}"
@@ -722,11 +719,7 @@ class PostManager:
                         await self.bot.send_media_group(chat_id=channel_name, media=media_group)
 
                 successful_posts += 1
-                # Extract sales rank for logging
-                sales_rank = formatted_product_data.get('SalesRank') or formatted_product_data.get('sales_rank') or product_data.get('sales_rank')
-                asin = formatted_product_data.get('ASIN') or formatted_product_data.get('asin') or product_data.get('asin', 'Unknown')
-                rank_info = f" (rank: {sales_rank})" if sales_rank else ""
-                print(f"✅ Posted queued product {asin} to {channel_name} for campaign {campaign['name']}{rank_info}")
+                print(f"✅ Posted queued product to {channel_name} for campaign {campaign['name']}")
 
             except Exception as e:
                 error_msg = f"❌ Не удалось опубликовать продукт из очереди в {channel_name} для кампании '{campaign['name']}': {e}"

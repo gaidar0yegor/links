@@ -235,6 +235,7 @@ class CampaignScheduler:
             fulfilled_by_amazon = params.get('fulfilled_by_amazon')
             # Get campaign-specific sales rank threshold (simplified quality control)
             max_sales_rank = params.get('max_sales_rank', 10000)
+            min_review_count = params.get('min_review_count', 0)
 
             if not browse_node_ids:
                 print(f"⚠️  Кампания '{campaign_name}': нет browse_node_ids, пропускаем")
@@ -252,6 +253,8 @@ class CampaignScheduler:
                     min_rating=min_rating,
                     min_price=min_price,
                     fulfilled_by_amazon=fulfilled_by_amazon,
+                    max_sales_rank=max_sales_rank,
+                    min_review_count=min_review_count,
                     max_results=50  # Increased from 10 to 50 to find more new products
                 )
 
