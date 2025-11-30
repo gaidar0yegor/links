@@ -393,31 +393,15 @@ class PostManager:
                 }
 
             if not content_result:
-                print(f"⚠️  Content generation failed, using fallback for campaign {campaign['name']}")
+                error_msg = f"Генерация контента не удалась (LLM Error), пропускаем пост для кампании {campaign['name']}"
+                print(f"⚠️  {error_msg}")
+                # Notify user about the failure instead of posting bad content
+                await self._notify_user(f"🚨 Пропущен пост: Ошибка генерации текста (проверьте OpenAI API).", user_id=user_id)
+                return
+
+                # FALLBACK REMOVED as per user request to avoid low-quality posts
                 # Enhanced fallback content with available product data
-                title = product_data.get('Title', 'Amazing Product')
-                rating = product_data.get('Rating', '')
-                reviews = product_data.get('ReviewsCount', '')
-                price = product_data.get('Price', '')
-
-                # Build enhanced fallback text
-                text_parts = [f"✨ **GREAT DEAL!** {title}"]
-
-                if rating and rating != 'None':
-                    text_parts.append(f"⭐ **{rating}/5 stars**")
-                if reviews and reviews != 'None':
-                    text_parts.append(f"📊 **{reviews} reviews**")
-                if price and price != 'None':
-                    text_parts.append(f"💰 **Price: {price}**")
-
-                text_parts.append("\nCheck out this amazing product!")
-
-                content_result = {
-                    'text': '\n'.join(text_parts),
-                    'hashtags': '#Deal #Product #Affiliate',
-                    'product_link': product_data.get('AffiliateLink', ''),
-                    'product_images': product_data.get('ImageURLs', [])
-                }
+                # ... (fallback code removed) ...
 
         except Exception as e:
             error_msg = f"Генерация контента для кампании {campaign['name']} не удалась: {str(e)}"
@@ -595,31 +579,13 @@ class PostManager:
                 }
 
             if not content_result:
-                print(f"⚠️  Content generation failed for queued product, using fallback")
-                # Enhanced fallback content with available product data
-                title = formatted_product_data.get('Title', 'Amazing Product')
-                rating = formatted_product_data.get('Rating', '')
-                reviews = formatted_product_data.get('ReviewsCount', '')
-                price = formatted_product_data.get('Price', '')
+                error_msg = f"Генерация контента не удалась (LLM Error), пропускаем пост для очереди кампании {campaign['name']}"
+                print(f"⚠️  {error_msg}")
+                await self._notify_user(f"🚨 Пропущен пост из очереди: Ошибка генерации текста.", user_id=user_id)
+                return
 
-                # Build enhanced fallback text
-                text_parts = [f"✨ **GREAT DEAL!** {title}"]
-
-                if rating and rating != 'None' and rating != '':
-                    text_parts.append(f"⭐ **{rating}/5 stars**")
-                if reviews and reviews != 'None' and reviews != '':
-                    text_parts.append(f"📊 **{reviews} reviews**")
-                if price and price != 'None' and price != '':
-                    text_parts.append(f"💰 **Price: {price}**")
-
-                text_parts.append("\nCheck out this amazing product!")
-
-                content_result = {
-                    'text': '\n'.join(text_parts),
-                    'hashtags': '#Deal #Product #Affiliate',
-                    'product_link': formatted_product_data.get('affiliate_link', ''),
-                    'product_images': formatted_product_data.get('image_urls', [])
-                }
+                # FALLBACK REMOVED for queued products too
+                # ... (fallback code removed) ...
 
         except Exception as e:
             error_msg = f"Генерация контента для продукта из очереди {product_data.get('asin')} не удалась: {str(e)}"

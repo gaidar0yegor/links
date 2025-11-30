@@ -495,6 +495,7 @@ class AmazonPAAPIClient:
                             image_urls.append(variant_url)
         
         product_data["ImageURLs"] = image_urls[:3]
+        product_data["image_urls"] = image_urls[:3]  # Also add lowercase for compatibility
 
 
         # Extract price
@@ -981,6 +982,7 @@ class AmazonPAAPIClient:
                         scraped_data = await scraper.scrape_product_data(asin)
                         if scraped_data:
                             # Convert scraped data to enriched format
+                            default_image = f"https://m.media-amazon.com/images/I/{asin}._SL500_.jpg"
                             enriched_data = {
                                 'asin': scraped_data['asin'],
                                 'title': scraped_data.get('title'),
@@ -989,7 +991,7 @@ class AmazonPAAPIClient:
                                 'rating': scraped_data.get('rating'),
                                 'review_count': scraped_data.get('review_count'),
                                 'sales_rank': scraped_data.get('sales_rank'),
-                                'image_url': f"https://m.media-amazon.com/images/I/{asin}._SL500_.jpg",  # Default image
+                                'image_urls': [default_image],  # Use list format for consistency
                                 'affiliate_link': f"https://www.amazon.it/dp/{asin}?tag={self.associate_tag}",
                                 'features': scraped_data.get('features', []),
                                 'description': scraped_data.get('description')
@@ -1120,7 +1122,7 @@ class AmazonPAAPIClient:
                 'rating': None,
                 'review_count': None,
                 'sales_rank': None,
-                'image_url': '',
+                'image_urls': [],  # Use list format for consistency
                 'affiliate_link': getattr(item, 'detail_page_url', ''),
             }
 
@@ -1219,7 +1221,9 @@ class AmazonPAAPIClient:
             if hasattr(item, 'images') and item.images:
                 if hasattr(item.images, 'primary') and item.images.primary:
                     if hasattr(item.images.primary, 'large') and item.images.primary.large:
-                        product_data['image_url'] = getattr(item.images.primary.large, 'url', '')
+                        primary_url = getattr(item.images.primary.large, 'url', '')
+                        if primary_url:
+                            product_data['image_urls'] = [primary_url]  # Use list format
 
             # Debug logging
             # print(f"DEBUG: Extracted product {asin}: rating={product_data['rating']}, reviews={product_data['review_count']}, sales_rank={product_data['sales_rank']}")
