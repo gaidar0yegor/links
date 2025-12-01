@@ -248,5 +248,28 @@ class GoogleSheetsAPI:
 
         return subcategories
 
+    def get_track_ids(self) -> list[dict]:
+        """Получает Track IDs из таблицы TrackIDs. Колонки: Tracker, NameTrack_id."""
+        if not self.available:
+            # Return dummy data for testing
+            return [
+                {"tracker": "telegram_main", "name": "Основной Telegram"},
+                {"tracker": "telegram_test", "name": "Тестовый канал"}
+            ]
+
+        try:
+            data = self.get_sheet_data("TrackIDs")
+            track_ids = []
+            for row in data[1:]:  # Skip header
+                if len(row) >= 2 and row[0]:
+                    track_ids.append({
+                        "tracker": row[0],  # Tracker (value to use)
+                        "name": row[1] if row[1] else row[0]  # NameTrack_id (display name)
+                    })
+            return track_ids
+        except Exception as e:
+            print(f"Error reading TrackIDs: {e}")
+            return []
+
 # Создай глобальный экземпляр для использования в хэндлерах
 sheets_api = GoogleSheetsAPI()

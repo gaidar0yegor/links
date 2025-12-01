@@ -24,9 +24,14 @@ def get_campaign_menu_keyboard(campaigns: list) -> InlineKeyboardMarkup:
         buttons.append([InlineKeyboardButton(text="⬇️ Редактировать существующую ⬇️", callback_data="ignore")])
         for camp in campaigns:
             # Отображение названия и статуса
-            status_emoji = "🟢" if camp['db_status'] == 'running' else "🔴"
-            if camp['status'] == 'Не выбраны тайминги':
-                 status_emoji = "🟡"
+            if camp['db_status'] == 'running':
+                status_emoji = "🟢"
+            elif camp['db_status'] == 'preparing':
+                status_emoji = "⏳"
+            elif camp['status'] == 'Не выбраны тайминги':
+                status_emoji = "🟡"
+            else:
+                status_emoji = "🔴"
 
             text = f"{status_emoji} {camp['name']} ({camp['status']})"
             # data: "campaign_edit:{campaign_id}"
@@ -43,6 +48,8 @@ def get_campaign_edit_keyboard(campaign_id: int, current_status: str) -> InlineK
     # Кнопки управления статусом (2.5)
     if current_status == 'running':
         status_button = InlineKeyboardButton(text="⏸ Остановить кампанию", callback_data=f"campaign_status:stop:{campaign_id}")
+    elif current_status == 'preparing':
+        status_button = InlineKeyboardButton(text="⏳ Подготовка... (5-10 мин)", callback_data=f"campaign_status:run:{campaign_id}")
     else:
         status_button = InlineKeyboardButton(text="▶️ Запустить кампанию", callback_data=f"campaign_status:run:{campaign_id}")
 
@@ -144,7 +151,14 @@ async def enter_campaign_edit_menu(callback: CallbackQuery, state: FSMContext):
     queue_size = await campaign_mgr.get_queue_size(campaign_id) if campaign_mgr else 0
 
     # Формируем обширный текст с ВСЕМИ параметрами кампании
-    status_emoji = "🟢" if campaign['status'] == 'running' else ("🔴" if campaign['status'] == 'stopped' else "🟡")
+    if campaign['status'] == 'running':
+        status_emoji = "🟢"
+    elif campaign['status'] == 'preparing':
+        status_emoji = "⏳"
+    elif campaign['status'] == 'stopped':
+        status_emoji = "🔴"
+    else:
+        status_emoji = "🟡"
 
     params = campaign.get('params', {})
 
@@ -221,9 +235,20 @@ async def toggle_campaign_status(callback: CallbackQuery, state: FSMContext):
         await callback.answer("❌ Неверный формат ID кампании.", show_alert=True)
         return
 
-    # 1. Проверяем, можно ли запустить (только если есть тайминги)
+    # 1. Проверяем, можно ли запустить
     campaign_mgr = get_campaign_manager()
     if action == 'run' and campaign_mgr:
+        # Проверка на статус preparing (очередь ещё собирается)
+        campaign = await campaign_mgr.get_campaign_details(campaign_id)
+        if campaign and campaign.get('status') == 'preparing':
+            await callback.answer(
+                "⏳ Кампания ещё готовится!\n"
+                "Дождитесь завершения сбора товаров (5-10 мин).",
+                show_alert=True
+            )
+            return
+        
+        # Проверка на тайминги
         has_timings = await campaign_mgr.has_timings(campaign_id)
         if not has_timings:
             await callback.answer("⚠️ Невозможно запустить! Сначала установите тайминги.", show_alert=True)

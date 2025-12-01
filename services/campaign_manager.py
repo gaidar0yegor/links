@@ -32,7 +32,9 @@ class CampaignManager:
             summary = []
             for r in records:
                 # Определение статуса согласно ТЗ
-                if r['status'] == 'stopped':
+                if r['status'] == 'preparing':
+                    status_text = "⏳ Подготовка..."
+                elif r['status'] == 'stopped':
                     status_text = "Не запущена"
                 elif r['status'] == 'running':
                     status_text = "Запущена"
@@ -63,7 +65,7 @@ class CampaignManager:
         # Extract values for separate columns
         name = campaign_data.pop('name')
         created_by_user_id = campaign_data.pop('created_by_user_id', None)
-        status = 'timingless'  # Initial status - timings not set yet
+        status = 'preparing'  # Initial status - queue is being populated
 
         # Extract additional parameters for separate columns
         min_review_count = campaign_data.pop('min_review_count', 0)
@@ -739,11 +741,53 @@ class CampaignManager:
                     print(f"❌ Failed to add {asin} to queue: {e}")
 
             print(f"🎉 Populated queue for campaign {campaign_id} with {queued_count} products")
+            
+            # После завершения сбора очереди меняем статус на 'stopped' (готова к запуску)
+            await self.update_status(campaign_id, 'stopped')
+            print(f"✅ Campaign {campaign_id} status changed to 'stopped' (ready to run)")
+            
+            # Уведомляем пользователя о готовности кампании
+            await self._notify_queue_ready(campaign_id, queued_count)
+            
             return queued_count
 
         except Exception as e:
             print(f"❌ Failed to populate queue for campaign {campaign_id}: {e}")
+            # В случае ошибки тоже меняем статус, чтобы не застрять в preparing
+            try:
+                await self.update_status(campaign_id, 'stopped')
+            except:
+                pass
             return 0
+
+    async def _notify_queue_ready(self, campaign_id: int, product_count: int):
+        """Уведомляет пользователя о готовности очереди кампании."""
+        try:
+            # Получаем информацию о кампании
+            campaign = await self.get_campaign_details_full(campaign_id)
+            if not campaign:
+                return
+            
+            campaign_name = campaign.get('name', f'ID {campaign_id}')
+            user_id = campaign.get('created_by_user_id')
+            
+            if not user_id:
+                print(f"⚠️ No user_id for campaign {campaign_id}, skipping notification")
+                return
+            
+            # Отправляем уведомление через бота
+            from main import bot
+            message = (
+                f"✅ <b>Кампания готова к запуску!</b>\n\n"
+                f"📋 Кампания: <b>{campaign_name}</b>\n"
+                f"📦 Товаров в очереди: <b>{product_count}</b>\n\n"
+                f"Теперь вы можете запустить кампанию в меню управления."
+            )
+            await bot.send_message(chat_id=user_id, text=message, parse_mode="HTML")
+            print(f"📨 Notification sent to user {user_id} about campaign {campaign_id}")
+            
+        except Exception as e:
+            print(f"⚠️ Failed to send queue ready notification: {e}")
 
     async def cleanup_old_products(self, days: int = 30):
         """

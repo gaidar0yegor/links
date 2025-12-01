@@ -1,7 +1,7 @@
 # services/post_manager.py
 import requests
 from aiogram.types import BufferedInputFile, InputMediaPhoto
-from PIL import Image, ImageDraw, ImageFont # Для водяных знаков
+# PIL imports removed - watermark functionality disabled
 from io import BytesIO
 from services.sheets_api import sheets_api
 from services.amazon_paapi_client import amazon_paapi_client
@@ -71,54 +71,15 @@ class PostManager:
             return data[1][0]
         return "Rewrite the following text to make it engaging and persuasive and fit for a social media post."
 
-    def _add_watermark(self, image_url: str, channel_name: str) -> BytesIO | None:
-        """Скачивает изображение, накладывает профессиональный водяной знак с названием канала и возвращает BytesIO."""
+    def _download_image(self, image_url: str) -> BytesIO | None:
+        """Скачивает изображение и возвращает BytesIO."""
         try:
-            # 1. Загрузка изображения
             response = requests.get(image_url, timeout=10)
-            img = Image.open(BytesIO(response.content)).convert("RGBA")
-
-            # 2. Создание слоя для водяного знака
-            watermark_layer = Image.new('RGBA', img.size, (0, 0, 0, 0))
-            draw = ImageDraw.Draw(watermark_layer)
-
-            # 3. Настройка шрифта
-            font_size = max(50, min(img.width, img.height) // 8)  # Even larger font
-            try:
-                font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size)
-            except:
-                font = ImageFont.load_default()
-
-            # 4. Расчет размеров текста
-            text_bbox = draw.textbbox((0, 0), channel_name, font=font)
-            text_width = text_bbox[2] - text_bbox[0]
-            text_height = text_bbox[3] - text_bbox[1]
-
-            # 5. Position text in the bottom-right corner
-            padding = max(20, font_size // 4)
-            text_x = img.width - text_width - padding
-            text_y = img.height - text_height - padding
-            
-            # 6. Draw a subtle drop shadow for contrast
-            shadow_offset = max(2, font_size // 25)
-            shadow_color = (0, 0, 0, 128) # Semi-transparent black
-            draw.text((text_x + shadow_offset, text_y + shadow_offset), channel_name, font=font, fill=shadow_color)
-
-            # 7. Draw the main semi-transparent text
-            text_color = (255, 255, 255, 150) # More opaque white
-            draw.text((text_x, text_y), channel_name, fill=text_color, font=font)
-
-            # 8. Объединяем изображение с водяным знаком
-            combined = Image.alpha_composite(img, watermark_layer)
-
-            # 9. Сохранение в BytesIO с оптимизацией
-            output = BytesIO()
-            combined.convert("RGB").save(output, format="JPEG", quality=95, optimize=True) # Increased quality
+            output = BytesIO(response.content)
             output.seek(0)
             return output
-
         except Exception as e:
-            print(f"❌ Ошибка при наложении водяного знака: {e}")
+            print(f"❌ Ошибка при загрузке изображения: {e}")
             return None
 
     async def fetch_and_post_enhanced(self, campaign: dict):
@@ -469,7 +430,7 @@ class PostManager:
                     )
                 elif len(image_urls) == 1:
                     # Single image, use send_photo
-                    image_stream = self._add_watermark(image_urls[0], channel_name)
+                    image_stream = self._download_image(image_urls[0])
                     if image_stream:
                         image_stream.seek(0)
                         await self.bot.send_photo(
@@ -482,7 +443,7 @@ class PostManager:
                     # Multiple images, use send_media_group
                     media_group = []
                     for i, url in enumerate(image_urls):
-                        image_stream = self._add_watermark(url, channel_name)
+                        image_stream = self._download_image(url)
                         if image_stream:
                             image_stream.seek(0)
                             photo_file = BufferedInputFile(image_stream.read(), filename=f"photo{i}.jpg")
@@ -659,7 +620,7 @@ class PostManager:
                     )
                 elif len(image_urls) == 1:
                     # Single image, use send_photo
-                    image_stream = self._add_watermark(image_urls[0], channel_name)
+                    image_stream = self._download_image(image_urls[0])
                     if image_stream:
                         image_stream.seek(0)
                         await self.bot.send_photo(
@@ -672,7 +633,7 @@ class PostManager:
                     # Multiple images, use send_media_group
                     media_group = []
                     for i, url in enumerate(image_urls):
-                        image_stream = self._add_watermark(url, channel_name)
+                        image_stream = self._download_image(url)
                         if image_stream:
                             image_stream.seek(0)
                             photo_file = BufferedInputFile(image_stream.read(), filename=f"photo{i}.jpg")
