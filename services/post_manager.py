@@ -1,5 +1,7 @@
 # services/post_manager.py
 import requests
+import re
+from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 from aiogram.types import BufferedInputFile, InputMediaPhoto
 # PIL imports removed - watermark functionality disabled
 from io import BytesIO
@@ -7,6 +9,43 @@ from services.sheets_api import sheets_api
 from services.amazon_paapi_client import amazon_paapi_client
 from services.llm_client import OpenAIClient
 from typing import Optional
+
+
+def replace_affiliate_tag(url: str, new_tag: str) -> str:
+    """
+    Заменяет существующий tag= параметр в Amazon affiliate ссылке на новый.
+    Если tag= отсутствует, добавляет его.
+    
+    Args:
+        url: Исходная affiliate ссылка
+        new_tag: Новый track ID для замены
+    
+    Returns:
+        URL с замененным tag параметром
+    """
+    if not url or not new_tag:
+        return url
+    
+    parsed = urlparse(url)
+    query_params = parse_qs(parsed.query, keep_blank_values=True)
+    
+    # Заменяем или добавляем tag
+    query_params['tag'] = [new_tag]
+    
+    # Собираем URL обратно
+    # Используем urlencode с doseq=True для корректной обработки списков
+    new_query = urlencode({k: v[0] if len(v) == 1 else v for k, v in query_params.items()}, doseq=True)
+    
+    new_url = urlunparse((
+        parsed.scheme,
+        parsed.netloc,
+        parsed.path,
+        parsed.params,
+        new_query,
+        parsed.fragment
+    ))
+    
+    return new_url
 
 
 class PostManager:
@@ -386,20 +425,22 @@ class PostManager:
         for channel_name in channels:
             # Create channel-specific UTM link
             if base_affiliate_link:
-                utm_params = []
-
-                # Add channel-specific track ID, fallback to campaign track_id
+                # Определяем какой track_id использовать (канал или кампания)
                 channel_track_id = channel_tracking_ids.get(channel_name)
-                if channel_track_id:
-                    utm_params.append(f"tag={channel_track_id}")
-                    print(f"✅ Added channel Track ID for {channel_name}: {channel_track_id}")
+                campaign_track_id = campaign.get('track_id')
+                
+                # Приоритет: channel track_id > campaign track_id
+                target_tag = channel_track_id or campaign_track_id
+                
+                # Заменяем tag в ссылке (если есть новый tag)
+                if target_tag:
+                    working_link = replace_affiliate_tag(base_affiliate_link, target_tag)
+                    print(f"✅ Replaced affiliate tag with: {target_tag} for {channel_name}")
                 else:
-                    # Fallback to campaign track_id
-                    campaign_track_id = campaign.get('track_id')
-                    if campaign_track_id:
-                        utm_params.append(f"tag={campaign_track_id}")
-                        print(f"✅ Added campaign Track ID (fallback) for {channel_name}: {campaign_track_id}")
-
+                    working_link = base_affiliate_link
+                
+                # Добавляем UTM параметры
+                utm_params = []
                 for param, value in utm_marks.items():
                     utm_params.append(f"{param}={value}")
 
@@ -407,15 +448,19 @@ class PostManager:
                 if 'utm_campaign' not in utm_marks:
                     utm_params.append(f"utm_campaign={campaign['name'].replace(' ', '_')}")
 
-                utm_string = "&".join(utm_params)
-                final_link = f"{base_affiliate_link}{'&' if '?' in base_affiliate_link else '?'}{utm_string}"
+                if utm_params:
+                    utm_string = "&".join(utm_params)
+                    final_link = f"{working_link}{'&' if '?' in working_link else '?'}{utm_string}"
+                else:
+                    final_link = working_link
             else:
                 final_link = base_affiliate_link
 
             # Create channel-specific text content
             text_content = base_text_content
             if final_link:
-                text_content += f"\n\n🔗 [Shop Now]({final_link})"
+                link_text = sheets_api.get_link_format()
+                text_content += f"\n\n[{link_text}]({final_link})"
 
             # Truncate content to Telegram's caption limit (1024 chars)
             if len(text_content) > 1024:
@@ -511,6 +556,12 @@ class PostManager:
         params = campaign.get('params', {})
         language = params.get('language', 'en')
         user_id = params.get('created_by_user_id')
+        
+        # Get category from campaign for template selection
+        campaign_categories = params.get('categories', [])
+        category = None
+        if campaign_categories and isinstance(campaign_categories, list) and len(campaign_categories) > 0:
+            category = campaign_categories[0]
 
         # Use enriched product data directly - content generator now handles multiple formats
         formatted_product_data = {
@@ -528,7 +579,7 @@ class PostManager:
 
         # --- Content Generation ---
         try:
-            content_result = await content_generator.generate_post_content(formatted_product_data, language=language)
+            content_result = await content_generator.generate_post_content(formatted_product_data, language=language, category=category)
 
             # Convert to post content format if needed
             if content_result and not isinstance(content_result, dict):
@@ -573,20 +624,22 @@ class PostManager:
         for channel_name in channels:
             # Create channel-specific UTM link
             if base_affiliate_link:
-                utm_params = []
-
-                # Add channel-specific track ID, fallback to campaign track_id
+                # Определяем какой track_id использовать (канал или кампания)
                 channel_track_id = channel_tracking_ids.get(channel_name)
-                if channel_track_id:
-                    utm_params.append(f"tag={channel_track_id}")
-                    print(f"✅ Added channel Track ID for {channel_name}: {channel_track_id}")
+                campaign_track_id = campaign.get('track_id')
+                
+                # Приоритет: channel track_id > campaign track_id
+                target_tag = channel_track_id or campaign_track_id
+                
+                # Заменяем tag в ссылке (если есть новый tag)
+                if target_tag:
+                    working_link = replace_affiliate_tag(base_affiliate_link, target_tag)
+                    print(f"✅ Replaced affiliate tag with: {target_tag} for {channel_name}")
                 else:
-                    # Fallback to campaign track_id
-                    campaign_track_id = campaign.get('track_id')
-                    if campaign_track_id:
-                        utm_params.append(f"tag={campaign_track_id}")
-                        print(f"✅ Added campaign Track ID (fallback) for {channel_name}: {campaign_track_id}")
-
+                    working_link = base_affiliate_link
+                
+                # Добавляем UTM параметры
+                utm_params = []
                 for param, value in utm_marks.items():
                     utm_params.append(f"{param}={value}")
 
@@ -594,8 +647,11 @@ class PostManager:
                 if 'utm_campaign' not in utm_marks:
                     utm_params.append(f"utm_campaign={campaign['name'].replace(' ', '_')}")
 
-                utm_string = "&".join(utm_params)
-                final_link = f"{base_affiliate_link}{'&' if '?' in base_affiliate_link else '?'}{utm_string}"
+                if utm_params:
+                    utm_string = "&".join(utm_params)
+                    final_link = f"{working_link}{'&' if '?' in working_link else '?'}{utm_string}"
+                else:
+                    final_link = working_link
             else:
                 final_link = base_affiliate_link
 
@@ -605,7 +661,8 @@ class PostManager:
             # Create channel-specific text content
             text_content = base_text_content
             if final_link:
-                text_content += f"\n\n🔗 [Shop Now]({final_link})"
+                link_text = sheets_api.get_link_format()
+                text_content += f"\n\n[{link_text}]({final_link})"
 
             # Truncate content to Telegram's caption limit (1024 chars)
             if len(text_content) > 1024:

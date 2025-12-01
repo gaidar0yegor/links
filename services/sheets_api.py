@@ -1,8 +1,42 @@
 # services/sheets_api.py
 import gspread
+import time
 from google.oauth2.service_account import Credentials
 from config import conf # Используем конфигурацию из config.py
 from gspread.exceptions import WorksheetNotFound, SpreadsheetNotFound
+
+
+def _retry_with_backoff(func, max_retries: int = 3, base_delay: float = 1.0):
+    """
+    Выполняет функцию с повторными попытками и экспоненциальной задержкой.
+    
+    Args:
+        func: Функция для выполнения (callable)
+        max_retries: Максимальное количество попыток
+        base_delay: Базовая задержка в секундах (удваивается с каждой попыткой)
+    
+    Returns:
+        Результат выполнения функции
+    
+    Raises:
+        Exception: Если все попытки исчерпаны
+    """
+    last_exception = None
+    for attempt in range(max_retries):
+        try:
+            return func()
+        except WorksheetNotFound:
+            # Не ретраим если листа просто нет
+            raise
+        except Exception as e:
+            last_exception = e
+            if attempt < max_retries - 1:
+                wait_time = base_delay * (2 ** attempt)  # 1, 2, 4 секунды
+                print(f"⚠️ Google Sheets retry {attempt + 1}/{max_retries} after {wait_time:.1f}s: {type(e).__name__}")
+                time.sleep(wait_time)
+            else:
+                print(f"❌ Google Sheets failed after {max_retries} retries: {e}")
+    raise last_exception
 
 class GoogleSheetsAPI:
     """Класс для работы с Google Sheets через сервисный аккаунт."""
@@ -98,11 +132,11 @@ class GoogleSheetsAPI:
             return []
 
     def get_sheet_data(self, sheet_name: str) -> list[list[str]]:
-        """Общий метод для получения данных из любой таблицы."""
+        """Общий метод для получения данных из любой таблицы с retry логикой."""
         if not self.available:
             # Return dummy data for testing
             if sheet_name == "rewrite_prompt":
-                return [["Prompt"], ["Rewrite the following text to make it engaging and persuasive and fit for a social media post."]]
+                return [["Prompt", "Link_format"], ["Rewrite the following text to make it engaging and persuasive and fit for a social media post.", "🔜 Acquista ora"]]
             elif sheet_name == "statistics":
                 return [["Date", "Revenue", "Clicks", "Sales"], ["2024-01-01", "1000", "500", "50"]]
             elif sheet_name == "utm_marks":
@@ -111,15 +145,35 @@ class GoogleSheetsAPI:
                 return []
 
         try:
-            worksheet = self.spreadsheet.worksheet(sheet_name)
-            # Возвращаем все данные листа
-            return worksheet.get_all_values()
+            # Используем retry для устойчивости к временным сетевым ошибкам
+            def fetch_data():
+                worksheet = self.spreadsheet.worksheet(sheet_name)
+                return worksheet.get_all_values()
+            
+            return _retry_with_backoff(fetch_data, max_retries=3, base_delay=1.0)
         except WorksheetNotFound:
             print(f"WARNING: Worksheet '{sheet_name}' not found.")
             return []
         except Exception as e:
             print(f"Error reading sheet '{sheet_name}': {e}")
             return []
+
+    def get_link_format(self) -> str:
+        """Получает формат текста ссылки из таблицы rewrite_prompt (колонка Link_format)."""
+        if not self.available:
+            return "🔜 Acquista ora"  # Default for testing
+        
+        try:
+            data = self.get_sheet_data("rewrite_prompt")
+            # Ожидаем: [["Prompt", "Link_format"], ["prompt text...", "🔜 Acquista ora"]]
+            if data and len(data) > 1 and len(data[1]) > 1:
+                link_format = data[1][1].strip()
+                if link_format:
+                    return link_format
+            return "🔜 Acquista ora"  # Default fallback
+        except Exception as e:
+            print(f"Error reading link format: {e}")
+            return "🔜 Acquista ora"
 
     def get_utm_marks(self) -> dict:
         """Получает UTM метки из таблицы utm_marks."""

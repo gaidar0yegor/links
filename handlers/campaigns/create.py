@@ -1070,8 +1070,14 @@ async def toggle_select_all(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "campaign_final_save", CampaignStates.campaign_new_review)
 async def finalize_and_save_campaign(callback: CallbackQuery, state: FSMContext):
     """Финальное сохранение кампании в базу данных."""
-    # Даем мгновенный ответ Telegram, что кнопка нажата
-    await callback.answer("💾 Сохраняем кампанию...")
+    from aiogram.exceptions import TelegramBadRequest
+    
+    # ВАЖНО: Сразу отвечаем на callback, чтобы избежать timeout
+    try:
+        await callback.answer("💾 Сохраняем кампанию...")
+    except TelegramBadRequest:
+        pass  # Игнорируем если callback уже expired
+    
     data = await state.get_data()
     campaign_data = data['new_campaign']
 
@@ -1127,7 +1133,10 @@ async def finalize_and_save_campaign(callback: CallbackQuery, state: FSMContext)
         campaign_name = campaign_data['name']  # Store name before it gets popped
         is_unique = await campaign_mgr.is_name_unique(campaign_name)
         if not is_unique:
-            await callback.answer(f"⚠️ Кампания с названием '{campaign_name}' уже существует. Измените название.", show_alert=True)
+            try:
+                await callback.answer(f"⚠️ Кампания '{campaign_name}' уже существует.", show_alert=True)
+            except TelegramBadRequest:
+                await callback.message.answer(f"⚠️ Кампания с названием '{campaign_name}' уже существует. Измените название.")
             await state.set_state(CampaignStates.campaign_new_input_name)
             await callback.message.edit_text("Пожалуйста, введите другое, уникальное название для новой кампании:")
             return
@@ -1139,11 +1148,13 @@ async def finalize_and_save_campaign(callback: CallbackQuery, state: FSMContext)
         asyncio.create_task(campaign_mgr.populate_queue_for_campaign(campaign_id, limit=200))
         print(f"🚀 Started background queue population for campaign {campaign_id}")
 
-        # Показываем pop-up с информацией о подготовке
-        await callback.answer(
-            "⏳ Кампания создана! Идёт сбор товаров (5-10 мин).\n"
-            "Постинг начнётся после завершения подготовки.",
-            show_alert=True
+        # Показываем сообщение о подготовке (через message, не через callback.answer)
+        await callback.message.answer(
+            "⏳ <b>Кампания создана!</b>\n\n"
+            "Идёт сбор товаров (5-10 мин).\n"
+            "Постинг начнётся после завершения подготовки.\n\n"
+            "Вы получите уведомление когда кампания будет готова к запуску.",
+            parse_mode="HTML"
         )
 
         # Сбрасываем состояние и сразу переходим в меню кампаний.
@@ -1151,9 +1162,12 @@ async def finalize_and_save_campaign(callback: CallbackQuery, state: FSMContext)
         await enter_campaign_module(callback, state, campaign_name=campaign_name)
 
     except Exception as e:
-        # await callback.message.edit_text(f"❌ Критическая ошибка при сохранении кампании: {e}")
         print(f"❌ Критическая ошибка при сохранении кампании: {e}")
-        await callback.answer(f"❌ Критическая ошибка: {e}", show_alert=True)
+        # Используем message.answer вместо callback.answer (который может быть expired)
+        try:
+            await callback.message.answer(f"❌ Критическая ошибка при сохранении кампании: {e}")
+        except:
+            pass
         await state.clear()
 
 
