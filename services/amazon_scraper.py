@@ -295,13 +295,16 @@ class AmazonProductScraper:
                 element = soup.select_one(selector)
                 if element:
                     text = element.get_text().strip()
+                    aria_label = element.get('aria-label', '')  # FIX: Проверяем aria-label
+                    combined_text = f"{text} {aria_label}".lower()  # FIX: Объединяем для проверки
+                    
                     # Match integer numbers, ignoring dots/commas as thousands separators
-                    # "845 voti", "1.200 ratings"
+                    # "845 voti", "1.200 ratings", "(749)" with aria-label="749 Recensioni"
                     match = re.search(r'(\d+(?:[.,]\d+)*)', text.replace(',', '').replace('.', ''))
                     if match:
                         try:
-                            # Check if text actually looks like a review count (contains "voti", "ratings", "reviews")
-                            if any(k in text.lower() for k in ['voti', 'ratings', 'reviews', 'recensioni']):
+                            # Check if text OR aria-label contains review-related keywords
+                            if any(k in combined_text for k in ['voti', 'ratings', 'reviews', 'recensioni']):
                                 val = int(match.group(1).replace(',', '').replace('.', ''))
                                 review_count = val
                                 break

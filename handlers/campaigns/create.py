@@ -1152,8 +1152,7 @@ async def finalize_and_save_campaign(callback: CallbackQuery, state: FSMContext)
         await callback.message.answer(
             "⏳ <b>Кампания создана!</b>\n\n"
             "Идёт сбор товаров (5-10 мин).\n"
-            "Постинг начнётся после завершения подготовки.\n\n"
-            "Вы получите уведомление когда кампания будет готова к запуску.",
+            "Постинг начнётся после завершения подготовки.\n\n",
             parse_mode="HTML"
         )
 

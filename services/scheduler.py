@@ -35,20 +35,30 @@ class CampaignScheduler:
             'interval',
             hours=1,
             id='refresh_gsheets_data',
-            replace_existing=True
+            replace_existing=True,
+            misfire_grace_time=300  # 5 минут на запуск пропущенной задачи
         )
 
         # Новая задача: автоматическое обнаружение и очередь продуктов (каждые 6 часов)
+        italy_tz = ZoneInfo("Europe/Rome")
         self.scheduler.add_job(
             self.product_discovery_cycle,
             'interval',
-            hours=6,  # Changed from 12 to 6
+            hours=0.6,
             id='product_discovery_cycle',
-            replace_existing=True
+            replace_existing=True,
+            misfire_grace_time=3600,  # 1 час на запуск пропущенной задачи
+            next_run_time=datetime.now(italy_tz)  # Первый запуск сразу при старте
         )
 
         self.scheduler.start()
         print("✅ Планировщик задач запущен.")
+        
+        # Логируем зарегистрированные задачи
+        print("📅 Зарегистрированные задачи:")
+        for job in self.scheduler.get_jobs():
+            next_run = job.next_run_time.strftime('%Y-%m-%d %H:%M:%S %Z') if job.next_run_time else 'N/A'
+            print(f"   • {job.id}: следующий запуск в {next_run}")
 
     async def main_posting_cycle(self):
         """Главный цикл, который проверяет тайминги, конфликты и запускает посты."""
@@ -75,9 +85,8 @@ class CampaignScheduler:
                 campaigns_to_run.append(campaign)
 
         if not campaigns_to_run:
-            # TEMPORARY: Force run ALL active campaigns to test posting
-            print(f"⏰ Нет кампаний для запуска по расписанию. Принудительно запускаем все активные кампании")
-            campaigns_to_run = active_campaigns
+            # Нет кампаний, соответствующих текущему расписанию — пропускаем цикл
+            return
 
         # 3. Запускаем все подходящие кампании (с учетом частоты постинга)
         for selected_campaign in campaigns_to_run:
@@ -279,13 +288,14 @@ class CampaignScheduler:
                         'asin': product['asin'],
                         'title': product.get('title'),
                         'price': product.get('price'),
-                        'currency': product.get('currency', 'USD'),
+                        'currency': product.get('currency', 'EUR'),
                         'rating': product.get('rating'),
                         'review_count': product.get('review_count'),
                         'sales_rank': sales_rank,
-                        'image_url': product.get('image_url'),
+                        'image_urls': product.get('image_urls', []),  # FIX: было 'image_url' (singular)
                         'affiliate_link': product.get('affiliate_link'),
-                        'browse_node_ids': browse_node_ids
+                        'browse_node_ids': browse_node_ids,
+                        'features': product.get('features', [])  # FIX: добавлено для полноценных постов
                     }
 
                     # Добавляем продукт в очередь

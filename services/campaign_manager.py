@@ -8,6 +8,11 @@ class CampaignManager:
     """Управление операциями с рекламными кампаниями в PostgreSQL."""
     def __init__(self, db_pool: asyncpg.pool.Pool):
         self.db_pool = db_pool
+        self._bot = None  # Ссылка на бота для уведомлений
+    
+    def set_bot(self, bot):
+        """Устанавливает ссылку на бота для отправки уведомлений."""
+        self._bot = bot
 
     async def get_all_campaigns_summary(self) -> List[Dict[str, Any]]:
         """
@@ -661,12 +666,18 @@ class CampaignManager:
             campaign = await self.get_campaign_details_full(campaign_id)
             if not campaign:
                 print(f"❌ Campaign {campaign_id} not found for queue population")
+                # FIX: Меняем статус, чтобы не застрять в 'preparing'
+                try:
+                    await self.update_status(campaign_id, 'stopped')
+                except:
+                    pass
                 return 0
 
             # Check current queue size to avoid overpopulation
             current_queue_size = await self.get_queue_size(campaign_id)
             if current_queue_size >= limit:
                 print(f"✅ Campaign {campaign_id} already has {current_queue_size} products in queue")
+                await self.update_status(campaign_id, 'stopped')
                 return current_queue_size
 
             print(f"🔄 Populating queue for campaign {campaign['name']} (ID: {campaign_id})")
@@ -676,6 +687,8 @@ class CampaignManager:
                 from services.amazon_paapi_client import amazon_paapi_client
             except ImportError:
                 print(f"⚠️  Amazon PA API client not available, skipping queue population")
+                await self.update_status(campaign_id, 'stopped')
+                await self._notify_queue_ready(campaign_id, 0)
                 return 0
 
             params = campaign.get('params', {})
@@ -683,6 +696,8 @@ class CampaignManager:
 
             if not browse_node_ids:
                 print(f"⚠️  No browse_node_ids for campaign {campaign_id}, skipping queue population")
+                await self.update_status(campaign_id, 'stopped')
+                await self._notify_queue_ready(campaign_id, 0)
                 return 0
 
             # Search for products
@@ -698,6 +713,8 @@ class CampaignManager:
 
             if not search_results:
                 print(f"❌ No products found for campaign {campaign_id}")
+                await self.update_status(campaign_id, 'stopped')
+                await self._notify_queue_ready(campaign_id, 0)
                 return 0
 
             # Get already posted ASINs to avoid duplicates
@@ -763,6 +780,11 @@ class CampaignManager:
     async def _notify_queue_ready(self, campaign_id: int, product_count: int):
         """Уведомляет пользователя о готовности очереди кампании."""
         try:
+            # Проверяем, что бот установлен
+            if not self._bot:
+                print(f"⚠️ Bot not set in CampaignManager, skipping notification for campaign {campaign_id}")
+                return
+            
             # Получаем информацию о кампании
             campaign = await self.get_campaign_details_full(campaign_id)
             if not campaign:
@@ -775,15 +797,25 @@ class CampaignManager:
                 print(f"⚠️ No user_id for campaign {campaign_id}, skipping notification")
                 return
             
-            # Отправляем уведомление через бота
-            from main import bot
-            message = (
-                f"✅ <b>Кампания готова к запуску!</b>\n\n"
-                f"📋 Кампания: <b>{campaign_name}</b>\n"
-                f"📦 Товаров в очереди: <b>{product_count}</b>\n\n"
-                f"Теперь вы можете запустить кампанию в меню управления."
-            )
-            await bot.send_message(chat_id=user_id, text=message, parse_mode="HTML")
+            if product_count > 0:
+                message = (
+                    f"✅ <b>Кампания готова к запуску!</b>\n\n"
+                    f"📋 Кампания: <b>{campaign_name}</b>\n"
+                    f"📦 Товаров в очереди: <b>{product_count}</b>\n\n"
+                    f"Теперь вы можете запустить кампанию в меню управления."
+                )
+            else:
+                message = (
+                    f"⚠️ <b>Кампания создана, но очередь пуста!</b>\n\n"
+                    f"📋 Кампания: <b>{campaign_name}</b>\n"
+                    f"📦 Товаров найдено: <b>0</b>\n\n"
+                    f"Возможные причины:\n"
+                    f"• Слишком строгие фильтры (Sales Rank, мин. отзывы)\n"
+                    f"• Нет товаров в выбранных категориях\n\n"
+                    f"Попробуйте ослабить фильтры или дождитесь автопоиска через 6 часов."
+                )
+            
+            await self._bot.send_message(chat_id=user_id, text=message, parse_mode="HTML")
             print(f"📨 Notification sent to user {user_id} about campaign {campaign_id}")
             
         except Exception as e:

@@ -48,6 +48,67 @@ def replace_affiliate_tag(url: str, new_tag: str) -> str:
     return new_url
 
 
+def escape_markdown_v2(text: str) -> str:
+    """
+    Экранирует специальные символы для Telegram MarkdownV2.
+    Не экранирует символы внутри URL (между скобками в ссылках).
+    """
+    if not text:
+        return text
+    
+    # Символы, которые нужно экранировать в MarkdownV2
+    # Исключаем [ ] ( ) которые используются для ссылок
+    escape_chars = ['_', '*', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+    
+    result = text
+    for char in escape_chars:
+        result = result.replace(char, '\\' + char)
+    
+    return result
+
+
+def sanitize_markdown_text(text: str) -> str:
+    """
+    Санитизирует текст для безопасной отправки с parse_mode='Markdown'.
+    Удаляет/экранирует проблемные символы, сохраняя базовое форматирование.
+    """
+    if not text:
+        return text
+    
+    # Находим все ссылки [text](url) и временно заменяем их
+    link_pattern = r'\[([^\]]+)\]\(([^)]+)\)'
+    links = re.findall(link_pattern, text)
+    
+    # Заменяем ссылки на плейсхолдеры
+    placeholder_text = text
+    for i, (link_text, url) in enumerate(links):
+        placeholder_text = placeholder_text.replace(f'[{link_text}]({url})', f'__LINK_{i}__')
+    
+    # Экранируем проблемные символы в основном тексте
+    # Для обычного Markdown (не V2) нужно экранировать: _ * [ ] ( ) ~ ` > # + - = | { } . !
+    # Но мы хотим сохранить базовое форматирование (* для bold, _ для italic)
+    # Поэтому экранируем только те, что ломают парсинг
+    
+    # Убираем непарные * и _ которые ломают Markdown
+    # Считаем количество каждого символа
+    for char in ['*', '_']:
+        count = placeholder_text.count(char)
+        if count % 2 != 0:
+            # Нечётное количество - убираем последний
+            last_pos = placeholder_text.rfind(char)
+            placeholder_text = placeholder_text[:last_pos] + placeholder_text[last_pos+1:]
+    
+    # Экранируем квадратные скобки которые не часть ссылок
+    placeholder_text = re.sub(r'(?<!\[)\[(?![^\]]+\]\()', r'\\[', placeholder_text)
+    placeholder_text = re.sub(r'(?<!\])\](?!\()', r'\\]', placeholder_text)
+    
+    # Восстанавливаем ссылки
+    for i, (link_text, url) in enumerate(links):
+        placeholder_text = placeholder_text.replace(f'__LINK_{i}__', f'[{link_text}]({url})')
+    
+    return placeholder_text
+
+
 class PostManager:
     """Управляет бизнес-логикой: API, Рерайт, Водяные знаки, Постинг."""
     def __init__(self, bot):
@@ -465,6 +526,10 @@ class PostManager:
             # Truncate content to Telegram's caption limit (1024 chars)
             if len(text_content) > 1024:
                 text_content = text_content[:1020] + "..."
+            
+            # Sanitize markdown to prevent parsing errors
+            text_content = sanitize_markdown_text(text_content)
+            
             try:
                 if not image_urls:
                     # No images, send text only
@@ -667,6 +732,10 @@ class PostManager:
             # Truncate content to Telegram's caption limit (1024 chars)
             if len(text_content) > 1024:
                 text_content = text_content[:1020] + "..."
+            
+            # Sanitize markdown to prevent parsing errors
+            text_content = sanitize_markdown_text(text_content)
+            
             try:
                 if not image_urls:
                     # No images, send text only

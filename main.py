@@ -24,6 +24,11 @@ async def main():
     bot = Bot(token=conf.bot_token)
     dp = Dispatcher(storage=storage) # <--- Указываем Redis FSM Storage здесь
     print("🔥 DEBUG: Dispatcher created")
+    
+    # Передаём ссылку на бота в CampaignManager для уведомлений
+    if db_pool:
+        campaign_manager_instance.set_bot(bot)
+        print("🔥 DEBUG: Bot reference set in CampaignManager")
 
     # Регистрация роутеров
     # auth.router должен перехватывать /start
