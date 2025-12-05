@@ -1,9 +1,97 @@
 # services/amazon_paapi_client.py
 import asyncio
 import time
+import hashlib
+import hmac
+import json
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from config import conf
 from services.logger import bot_logger
+
+
+# Global session for connection reuse (thread-safe)
+_http_session: Optional[requests.Session] = None
+
+
+def _get_http_session() -> requests.Session:
+    """Get or create a reusable HTTP session with retry logic."""
+    global _http_session
+    if _http_session is None:
+        _http_session = requests.Session()
+        
+        # Configure retry strategy
+        retry_strategy = Retry(
+            total=3,  # 3 retries
+            backoff_factor=1,  # 1s, 2s, 4s delays
+            status_forcelist=[429, 500, 502, 503, 504],  # Retry on these status codes
+            allowed_methods=["POST"],  # Retry POST requests
+        )
+        
+        adapter = HTTPAdapter(
+            max_retries=retry_strategy,
+            pool_connections=10,
+            pool_maxsize=10,
+        )
+        _http_session.mount("https://", adapter)
+        
+    return _http_session
+
+
+def _sign_aws4_request(host: str, region: str, access_key: str, secret_key: str, 
+                        payload: str, service: str = "ProductAdvertisingAPI") -> Dict[str, str]:
+    """
+    Create AWS Signature Version 4 headers for PA-API requests.
+    Used for raw HTTP calls to bypass SDK limitations (e.g., OffersV2).
+    """
+    method = "POST"
+    uri = "/paapi5/getitems"
+    
+    # Use timezone-aware UTC datetime (Python 3.12+ compatible)
+    t = datetime.now(timezone.utc)
+    amz_date = t.strftime('%Y%m%dT%H%M%SZ')
+    date_stamp = t.strftime('%Y%m%d')
+    
+    # Headers
+    headers = {
+        'content-encoding': 'amz-1.0',
+        'content-type': 'application/json; charset=utf-8',
+        'host': host,
+        'x-amz-date': amz_date,
+        'x-amz-target': 'com.amazon.paapi5.v1.ProductAdvertisingAPIv1.GetItems'
+    }
+    
+    # Canonical request
+    signed_headers = ';'.join(sorted(headers.keys()))
+    canonical_headers = ''.join([f"{k}:{v}\n" for k, v in sorted(headers.items())])
+    payload_hash = hashlib.sha256(payload.encode('utf-8')).hexdigest()
+    
+    canonical_request = f"{method}\n{uri}\n\n{canonical_headers}\n{signed_headers}\n{payload_hash}"
+    
+    # String to sign
+    algorithm = 'AWS4-HMAC-SHA256'
+    credential_scope = f"{date_stamp}/{region}/{service}/aws4_request"
+    string_to_sign = f"{algorithm}\n{amz_date}\n{credential_scope}\n{hashlib.sha256(canonical_request.encode('utf-8')).hexdigest()}"
+    
+    # Signing key
+    def sign(key, msg):
+        return hmac.new(key, msg.encode('utf-8'), hashlib.sha256).digest()
+    
+    k_date = sign(('AWS4' + secret_key).encode('utf-8'), date_stamp)
+    k_region = sign(k_date, region)
+    k_service = sign(k_region, service)
+    k_signing = sign(k_service, 'aws4_request')
+    
+    signature = hmac.new(k_signing, string_to_sign.encode('utf-8'), hashlib.sha256).hexdigest()
+    
+    # Authorization header
+    authorization = f"{algorithm} Credential={access_key}/{credential_scope}, SignedHeaders={signed_headers}, Signature={signature}"
+    headers['Authorization'] = authorization
+    
+    return headers
 
 try:
     # Correct imports for python-amazon-paapi library
@@ -72,6 +160,116 @@ class AmazonPAAPIClient:
                 traceback.print_exc()
                 bot_logger.log_error("AmazonPAAPIClient", e, "Failed to initialize PAAPI client")
                 self.api_client = None
+
+    def _get_items_raw_v2(self, asins: List[str]) -> List[Dict[str, Any]]:
+        """
+        Fetch items using raw HTTP with OffersV2 resources.
+        Bypasses SDK limitation that doesn't support OffersV2 enums.
+        
+        Args:
+            asins: List of ASINs to fetch (max 10 per request)
+            
+        Returns:
+            List of item dictionaries with OffersV2 data
+        """
+        if not asins:
+            return []
+        
+        # OffersV2 resources (validated as working)
+        offersv2_resources = [
+            "OffersV2.Listings.Price",
+            "OffersV2.Listings.Availability",
+            "OffersV2.Listings.Condition",
+            "OffersV2.Listings.IsBuyBoxWinner",
+            "OffersV2.Listings.MerchantInfo",
+        ]
+        
+        # Other useful resources
+        other_resources = [
+            "ItemInfo.Title",
+            "ItemInfo.Features",
+            "Images.Primary.Large",
+            "Images.Variants.Large",
+            "BrowseNodeInfo.WebsiteSalesRank",
+            "CustomerReviews.Count",
+            "CustomerReviews.StarRating",
+        ]
+        
+        payload = {
+            "ItemIds": asins[:10],  # API limit is 10
+            "PartnerTag": self.associate_tag,
+            "PartnerType": "Associates",
+            "Marketplace": "www.amazon.it",
+            "Resources": other_resources + offersv2_resources
+        }
+        
+        payload_json = json.dumps(payload)
+        
+        try:
+            headers = _sign_aws4_request(
+                host=self.host,
+                region=self.region,
+                access_key=self.access_key,
+                secret_key=self.secret_key,
+                payload=payload_json
+            )
+            
+            url = f"https://{self.host}/paapi5/getitems"
+            
+            # Use session for connection reuse and automatic retries
+            session = _get_http_session()
+            response = session.post(url, headers=headers, data=payload_json, timeout=15)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if "ItemsResult" in data and "Items" in data["ItemsResult"]:
+                    items = data["ItemsResult"]["Items"]
+                    
+                    # Log each item's OffersV2 data
+                    for item in items:
+                        asin = item.get("ASIN", "?")
+                        title = item.get("ItemInfo", {}).get("Title", {}).get("DisplayValue", "")[:50]
+                        
+                        # Extract V2 price data
+                        offers_v2 = item.get("OffersV2", {})
+                        listings = offers_v2.get("Listings", [])
+                        if listings:
+                            listing = listings[0]
+                            price = listing.get("Price", {}).get("Money", {}).get("DisplayAmount", "N/A")
+                            is_buybox = "✓" if listing.get("IsBuyBoxWinner") else "✗"
+                            merchant = listing.get("MerchantInfo", {}).get("Name", "?")
+                            print(f"📦 API V2: {asin} | {price} | BuyBox:{is_buybox} | {merchant} | {title}...")
+                        else:
+                            print(f"📦 API V2: {asin} | No OffersV2 listings | {title}...")
+                    
+                    bot_logger.log_info("AmazonPAAPIClient", 
+                        f"OffersV2 API success: {len(items)} items retrieved")
+                    return items
+                return []
+            else:
+                # Parse API error response
+                error_msg = "Unknown error"
+                try:
+                    error_data = response.json()
+                    if "Errors" in error_data and error_data["Errors"]:
+                        error_msg = error_data["Errors"][0].get("Message", error_msg)
+                except:
+                    error_msg = response.text[:200]
+                
+                bot_logger.log_error("AmazonPAAPIClient", 
+                    Exception(f"OffersV2 API {response.status_code}"), error_msg)
+                return []
+                
+        except requests.exceptions.Timeout:
+            bot_logger.log_error("AmazonPAAPIClient", 
+                Exception("OffersV2 API timeout"), f"ASINs: {asins[:3]}")
+            return []
+        except requests.exceptions.RequestException as e:
+            bot_logger.log_error("AmazonPAAPIClient", e, "OffersV2 network error")
+            return []
+        except Exception as e:
+            bot_logger.log_error("AmazonPAAPIClient", e, "OffersV2 unexpected error")
+            return []
 
     async def search_items(self, keywords: str, min_rating: float = 0.0, filters: Optional[Dict[str, Any]] = None, browse_node_ids: Optional[List[str]] = None, exclude_asins: Optional[List[str]] = None) -> Optional[Dict[str, Any]]:
         """
@@ -296,27 +494,69 @@ class AmazonPAAPIClient:
         return self._convert_to_standard_format(best_product)
 
     def _convert_to_standard_format(self, product: Dict[str, Any]) -> Dict[str, Any]:
-        """Convert enriched product data to our standard format."""
-        # Basic Info
-        title = product.get('item_info', {}).get('title', {}).get('display_value', 'N/A')
-        price = product.get('offers', {}).get('listings', [{}])[0].get('price', {}).get('display_amount', 'N/A')
-        reviews = product.get('customer_reviews', {}).get('count', 'N/A') if product.get('customer_reviews') else 'N/A'
-        link = product.get('detail_page_url', 'N/A')
-        image = product.get('images', {}).get('primary', {}).get('large', {}).get('url', 'N/A')
-
-        # Enhanced data
-        sales_rank = product.get('browse_node_info', {}).get('website_sales_rank', 'N/A')
-        if isinstance(sales_rank, dict):
-            sales_rank = sales_rank.get('sales_rank', 'N/A')
-
-        rating = product.get('customer_reviews', {}).get('star_rating', {}).get('rating', 'N/A') if product.get('customer_reviews', {}).get('star_rating') else 'N/A'
-
-        # Features as description
-        features = product.get('item_info', {}).get('features', {}).get('display_values', [])
-        description = ' '.join(features[:3]) if features else ''
+        """
+        Convert enriched product data to our standard format.
+        Supports both V1 (snake_case SDK dict) and V2 (PascalCase raw dict) formats.
+        """
+        # Detect if V2 format (PascalCase keys like 'ItemInfo', 'OffersV2')
+        is_v2 = 'ItemInfo' in product or 'OffersV2' in product
+        
+        if is_v2:
+            # V2 format (raw API response)
+            item_info = product.get('ItemInfo', {})
+            title = item_info.get('Title', {}).get('DisplayValue', 'N/A')
+            
+            # Price from OffersV2
+            price = 'N/A'
+            offers_v2 = product.get('OffersV2', {})
+            listings = offers_v2.get('Listings', [])
+            if listings:
+                money = listings[0].get('Price', {}).get('Money', {})
+                price = money.get('DisplayAmount', 'N/A')
+            
+            # Fallback to V1 Offers if OffersV2 not present
+            if price == 'N/A':
+                offers_v1 = product.get('Offers', {})
+                listings_v1 = offers_v1.get('Listings', [])
+                if listings_v1:
+                    price = listings_v1[0].get('Price', {}).get('DisplayAmount', 'N/A')
+            
+            reviews = product.get('CustomerReviews', {}).get('Count', 'N/A')
+            link = product.get('DetailPageURL', 'N/A')
+            image = product.get('Images', {}).get('Primary', {}).get('Large', {}).get('URL', 'N/A')
+            
+            sales_rank = product.get('BrowseNodeInfo', {}).get('WebsiteSalesRank', {})
+            if isinstance(sales_rank, dict):
+                sales_rank = sales_rank.get('SalesRank', 'N/A')
+            
+            star_rating = product.get('CustomerReviews', {}).get('StarRating', {})
+            rating = star_rating.get('Value', 'N/A') if star_rating else 'N/A'
+            
+            features = item_info.get('Features', {}).get('DisplayValues', [])
+            description = ' '.join(features[:3]) if features else ''
+            
+            asin = product.get('ASIN', '')
+        else:
+            # V1 format (SDK dict with snake_case)
+            title = product.get('item_info', {}).get('title', {}).get('display_value', 'N/A')
+            price = product.get('offers', {}).get('listings', [{}])[0].get('price', {}).get('display_amount', 'N/A')
+            reviews = product.get('customer_reviews', {}).get('count', 'N/A') if product.get('customer_reviews') else 'N/A'
+            link = product.get('detail_page_url', 'N/A')
+            image = product.get('images', {}).get('primary', {}).get('large', {}).get('url', 'N/A')
+            
+            sales_rank = product.get('browse_node_info', {}).get('website_sales_rank', 'N/A')
+            if isinstance(sales_rank, dict):
+                sales_rank = sales_rank.get('sales_rank', 'N/A')
+            
+            rating = product.get('customer_reviews', {}).get('star_rating', {}).get('rating', 'N/A') if product.get('customer_reviews', {}).get('star_rating') else 'N/A'
+            
+            features = product.get('item_info', {}).get('features', {}).get('display_values', [])
+            description = ' '.join(features[:3]) if features else ''
+            
+            asin = product.get('asin', '')
 
         return {
-            "ASIN": product.get('asin', ''),
+            "ASIN": asin,
             "Title": title,
             "ImageURL": image,
             "AffiliateLink": link,
@@ -759,7 +999,8 @@ class AmazonPAAPIClient:
                                    min_price: Optional[float] = None,
                                    fulfilled_by_amazon: Optional[bool] = None, max_results: int = 10,
                                    max_sales_rank: Optional[int] = None,
-                                   min_review_count: int = 0) -> List[Dict[str, Any]]:
+                                   min_review_count: int = 0,
+                                   items_per_node: int = 10) -> List[Dict[str, Any]]:
         """
         Enhanced search that returns multiple products with sales rank information.
         Uses GetItems API to enrich data with ratings, reviews, and sales rank.
@@ -772,11 +1013,12 @@ class AmazonPAAPIClient:
             fulfilled_by_amazon: Whether to filter for FBA products
             max_results: Maximum number of products to return
             max_sales_rank: Maximum sales rank for filtering
+            items_per_node: Target items to fetch per node (searches multiple pages if > 10)
 
         Returns:
             List of product dictionaries with enhanced data
         """
-        print(f"DEBUG: search_items_enhanced called with browse_node_ids={browse_node_ids}, max_results={max_results}")
+        print(f"DEBUG: search_items_enhanced called with {len(browse_node_ids)} nodes, {items_per_node} items/node")
 
         # If Amazon API is disabled or SDK not available, return empty list
         if not self.use_amazon_api or not PAAPI_AVAILABLE or not self.api_client:
@@ -785,60 +1027,78 @@ class AmazonPAAPIClient:
 
         try:
             candidate_asins = []
+            
+            # Calculate pages needed per node (API limit is 10 items per page)
+            pages_per_node = max(1, (items_per_node + 9) // 10)  # Ceiling division
+            import random
 
             # Phase 1: Search for candidate products using SearchItems
             for node_id in browse_node_ids:
-                try:
-                    # Randomize page to get fresh results
-                    import random
-                    page_num = random.randint(1, 5)
-                    
-                    # Create search request
-                    search_request = SearchItemsRequest(
-                        partner_tag=self.associate_tag,
-                        partner_type=PartnerType.ASSOCIATES,
-                        marketplace="www.amazon.it",
-                        browse_node_id=node_id,
-                        search_index="All",
-                        item_page=page_num,
-                        item_count=min(max_results * 2, 10),  # Get more candidates for filtering
-                        sort_by="Featured",
-                        resources=[
-                            SearchItemsResource.ITEMINFO_TITLE,
-                            SearchItemsResource.OFFERS_LISTINGS_PRICE,
-                            SearchItemsResource.IMAGES_PRIMARY_LARGE,
-                        ],
-                    )
+                node_asins = []
+                
+                # Search multiple pages if needed
+                for page_offset in range(pages_per_node):
+                    try:
+                        # For multi-page searches, use sequential pages 1,2,3...
+                        # For single-page, randomize for variety
+                        if pages_per_node > 1:
+                            page_num = page_offset + 1  # Sequential: 1, 2, 3
+                        else:
+                            page_num = random.randint(1, 5)  # Random for single page
+                        
+                        # Create search request
+                        search_request = SearchItemsRequest(
+                            partner_tag=self.associate_tag,
+                            partner_type=PartnerType.ASSOCIATES,
+                            marketplace="www.amazon.it",
+                            browse_node_id=node_id,
+                            search_index="All",
+                            item_page=page_num,
+                            item_count=10,  # Max per page
+                            sort_by="Featured",
+                            resources=[
+                                SearchItemsResource.ITEMINFO_TITLE,
+                                SearchItemsResource.OFFERS_LISTINGS_PRICE,
+                                SearchItemsResource.IMAGES_PRIMARY_LARGE,
+                            ],
+                        )
 
-                    # Apply basic filters
-                    if min_price:
-                        search_request.min_price = int(min_price * 100)  # Convert to cents
+                        # Apply basic filters
+                        if min_price:
+                            search_request.min_price = int(min_price * 100)  # Convert to cents
 
-                    # Execute search
-                    response = self.api_client.search_items(search_request)
+                        # Execute search
+                        response = self.api_client.search_items(search_request)
 
-                    if response and hasattr(response, 'search_result') and response.search_result:
-                        items = getattr(response.search_result, 'items', [])
-                        print(f"DEBUG: Found {len(items)} candidate items in browse node {node_id}")
+                        if response and hasattr(response, 'search_result') and response.search_result:
+                            items = getattr(response.search_result, 'items', None) or []
 
-                        for item in items:
-                            asin = getattr(item, 'asin', '')
-                            if asin:
-                                candidate_asins.append(asin)
+                            for item in items:
+                                asin = getattr(item, 'asin', '')
+                                # Validate ASIN format (alphanumeric, typically starts with B0)
+                                if asin and len(asin) == 10 and asin not in node_asins:
+                                    node_asins.append(asin)
+                        else:
+                            # No more results, stop searching this node
+                            print(f"📭 Node {node_id} page {page_num}: no results, stopping")
+                            break
 
-                    # Rate limiting between requests
-                    import time
-                    time.sleep(0.8)
+                        # Rate limiting between requests
+                        time.sleep(0.8)
 
-                except ApiException as e:
-                    print(f"DEBUG: API Exception for browse node {node_id}: {e.reason}")
-                    continue
-                except Exception as e:
-                    print(f"DEBUG: Exception for browse node {node_id}: {e}")
-                    continue
+                    except ApiException as e:
+                        print(f"DEBUG: API Exception for node {node_id} page {page_num}: {e.reason}")
+                        continue
+                    except Exception as e:
+                        print(f"DEBUG: Exception for node {node_id} page {page_num}: {e}")
+                        continue
+                
+                print(f"📦 Node {node_id}: {len(node_asins)} ASINs from {pages_per_node} page(s)")
+                candidate_asins.extend(node_asins)
 
             # Remove duplicates (process all candidates to maximize results)
             candidate_asins = list(set(candidate_asins))
+            print(f"📊 Total unique ASINs: {len(candidate_asins)}")
 
             if not candidate_asins:
                 print("DEBUG: No candidate ASINs found")
@@ -911,8 +1171,9 @@ class AmazonPAAPIClient:
 
     async def _enrich_products_batch(self, asins: List[str]) -> List[Dict[str, Any]]:
         """
-        Enrich a batch of products with detailed data using GetItems API + web scraping fallback.
-        Includes caching to reduce API calls.
+        Enrich a batch of products with detailed data using GetItems API with OffersV2.
+        Uses raw HTTP requests to bypass SDK limitation for OffersV2 support.
+        Includes web scraping fallback for missing data.
         """
         if not asins:
             return []
@@ -924,31 +1185,13 @@ class AmazonPAAPIClient:
             batch_asins = asins[i:i+10]
 
             try:
-                get_request = GetItemsRequest(
-                    partner_tag=self.associate_tag,
-                    partner_type=PartnerType.ASSOCIATES,
-                    marketplace="www.amazon.it",
-                    item_ids=batch_asins,
-                    resources=[
-                        GetItemsResource.ITEMINFO_TITLE,
-                        GetItemsResource.OFFERS_LISTINGS_PRICE,
-                        GetItemsResource.IMAGES_PRIMARY_LARGE,
-                        GetItemsResource.IMAGES_VARIANTS_LARGE,
-                        GetItemsResource.CUSTOMERREVIEWS_COUNT,
-                        GetItemsResource.CUSTOMERREVIEWS_STARRATING,
-                        GetItemsResource.ITEMINFO_FEATURES,
-                        GetItemsResource.BROWSENODEINFO_WEBSITESALESRANK,
-                        GetItemsResource.OFFERS_LISTINGS_SAVINGBASIS,
-                    ]
-                )
-
-                response = self.api_client.get_items(get_request)
-
-                if response and hasattr(response, 'items_result') and response.items_result:
-                    items = getattr(response.items_result, 'items', [])
-
+                # Use raw HTTP with OffersV2 resources
+                items = self._get_items_raw_v2(batch_asins)
+                
+                if items:
                     for item in items:
-                        enriched_data = self._extract_enriched_product_data(item)
+                        # item is now a dict (not SDK object) with OffersV2 structure
+                        enriched_data = self._extract_enriched_product_data_v2(item)
                         if enriched_data:
                             # Check if we need web scraping fallback for missing data
                             needs_scraping = (
@@ -959,7 +1202,6 @@ class AmazonPAAPIClient:
                             )
 
                             if needs_scraping:
-                                # print(f"DEBUG: API data incomplete for ASIN {enriched_data.get('asin')}, using web scraping fallback")
                                 try:
                                     from services.amazon_scraper import enrich_product_with_scraping
                                     enriched_data = await enrich_product_with_scraping(enriched_data)
@@ -967,12 +1209,15 @@ class AmazonPAAPIClient:
                                     print(f"DEBUG: Web scraping fallback failed: {e}")
 
                             enriched_products.append(enriched_data)
+                else:
+                    # Raw V2 failed, try web scraping
+                    raise Exception("Raw V2 API returned no items")
 
                 # Rate limiting between batches
                 await asyncio.sleep(0.8)
 
-            except ApiException as e:
-                print(f"DEBUG: GetItems API Exception for batch {batch_asins[:3]}...: {e.reason}")
+            except Exception as e:
+                print(f"DEBUG: GetItems V2 failed for batch {batch_asins[:3]}...: {e}")
                 # Fallback to web scraping for the entire batch
                 try:
                     from services.amazon_scraper import get_amazon_scraper
@@ -991,7 +1236,7 @@ class AmazonPAAPIClient:
                                 'rating': scraped_data.get('rating'),
                                 'review_count': scraped_data.get('review_count'),
                                 'sales_rank': scraped_data.get('sales_rank'),
-                                'image_urls': [default_image],  # Use list format for consistency
+                                'image_urls': [default_image],
                                 'affiliate_link': f"https://www.amazon.it/dp/{asin}?tag={self.associate_tag}",
                                 'features': scraped_data.get('features', []),
                                 'description': scraped_data.get('description')
@@ -1000,9 +1245,6 @@ class AmazonPAAPIClient:
                             print(f"DEBUG: Used web scraping for ASIN {asin}")
                 except Exception as scrape_e:
                     print(f"DEBUG: Web scraping fallback also failed: {scrape_e}")
-                continue
-            except Exception as e:
-                print(f"DEBUG: GetItems failed for batch {batch_asins[:3]}...: {e}")
                 continue
 
         return enriched_products
@@ -1103,6 +1345,115 @@ class AmazonPAAPIClient:
 
         except Exception as e:
             print(f"DEBUG: Failed to extract enriched product data: {e}")
+            return None
+
+    def _extract_enriched_product_data_v2(self, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Extract enriched product data from raw OffersV2 API response (dict format).
+        Handles the new OffersV2 JSON structure with Price.Money.Amount path.
+        """
+        try:
+            asin = item.get('ASIN', '')
+            if not asin:
+                return None
+
+            product_data = {
+                'asin': asin,
+                'title': '',
+                'price': None,
+                'currency': 'EUR',
+                'rating': None,
+                'review_count': None,
+                'sales_rank': None,
+                'image_urls': [],
+                'affiliate_link': item.get('DetailPageURL', ''),
+                'features': [],
+                'description': '',
+                'is_buy_box_winner': None,
+                'merchant_name': None,
+            }
+
+            # Extract title
+            item_info = item.get('ItemInfo', {})
+            if item_info.get('Title'):
+                product_data['title'] = item_info['Title'].get('DisplayValue', '')
+
+            # Extract features/description
+            if item_info.get('Features'):
+                features = item_info['Features'].get('DisplayValues', [])
+                product_data['features'] = features
+                product_data['description'] = ' '.join(features[:3]) if features else ''
+
+            # Extract price from OffersV2 (new V2 structure)
+            offers_v2 = item.get('OffersV2', {})
+            listings = offers_v2.get('Listings', [])
+            if listings:
+                listing = listings[0]
+                
+                # Buy Box Winner (V2 exclusive)
+                product_data['is_buy_box_winner'] = listing.get('IsBuyBoxWinner')
+                
+                # Merchant Info (V2 exclusive)
+                merchant_info = listing.get('MerchantInfo', {})
+                product_data['merchant_name'] = merchant_info.get('Name')
+                
+                # Price (V2 structure: Price.Money.Amount)
+                price_obj = listing.get('Price', {})
+                money = price_obj.get('Money', {})
+                if money.get('Amount') is not None:
+                    product_data['price'] = float(money['Amount'])
+                    product_data['currency'] = money.get('Currency', 'EUR')
+
+            # Fallback to V1 Offers if V2 not present
+            if product_data['price'] is None:
+                offers_v1 = item.get('Offers', {})
+                listings_v1 = offers_v1.get('Listings', [])
+                if listings_v1:
+                    price_obj = listings_v1[0].get('Price', {})
+                    if price_obj.get('Amount') is not None:
+                        product_data['price'] = float(price_obj['Amount'])
+                        product_data['currency'] = price_obj.get('Currency', 'EUR')
+
+            # Extract rating and review count
+            customer_reviews = item.get('CustomerReviews', {})
+            if customer_reviews.get('Count') is not None:
+                product_data['review_count'] = int(customer_reviews['Count'])
+            if customer_reviews.get('StarRating'):
+                star_rating = customer_reviews['StarRating']
+                if star_rating.get('Value') is not None:
+                    product_data['rating'] = float(star_rating['Value'])
+
+            # Extract sales rank
+            browse_node_info = item.get('BrowseNodeInfo', {})
+            website_sales_rank = browse_node_info.get('WebsiteSalesRank', {})
+            if isinstance(website_sales_rank, dict):
+                product_data['sales_rank'] = website_sales_rank.get('SalesRank')
+
+            # Extract images
+            image_urls = []
+            images = item.get('Images', {})
+            
+            # Primary image
+            primary = images.get('Primary', {})
+            large = primary.get('Large', {})
+            if large.get('URL'):
+                image_urls.append(large['URL'])
+            
+            # Variant images
+            variants = images.get('Variants', [])
+            for variant in variants:
+                if len(image_urls) >= 3:
+                    break
+                large_variant = variant.get('Large', {})
+                if large_variant.get('URL') and large_variant['URL'] not in image_urls:
+                    image_urls.append(large_variant['URL'])
+
+            product_data['image_urls'] = image_urls[:3]
+            
+            return product_data
+
+        except Exception as e:
+            print(f"DEBUG: Failed to extract V2 product data: {e}")
             return None
 
     def _extract_enhanced_product_data(self, item) -> Optional[Dict[str, Any]]:

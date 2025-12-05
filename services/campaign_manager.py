@@ -333,16 +333,27 @@ class CampaignManager:
                 data['final_link']
             )
 
-    async def get_posted_asins(self, campaign_id: int, limit: int = 1000) -> List[str]:
+    async def get_posted_asins(self, campaign_id: int, limit: int = 1000, days: int = 60) -> List[str]:
         """
         Get list of ASINs already posted or queued by this campaign to prevent duplicates.
-        Returns the most recent posted/queued ASINs (up to limit).
+        
+        Args:
+            campaign_id: The campaign ID
+            limit: Maximum number of ASINs to return
+            days: Only check posts from the last N days (default 60). 
+                  Products posted more than N days ago can be reposted.
+                  Queued products are always checked regardless of age.
+        
+        Returns:
+            List of ASINs that should not be posted again.
         """
         query = """
         SELECT asin
         FROM (
             SELECT asin FROM statistics_log
-            WHERE campaign_id = $1 AND asin IS NOT NULL AND asin != ''
+            WHERE campaign_id = $1 
+              AND asin IS NOT NULL AND asin != ''
+              AND post_time > CURRENT_TIMESTAMP - INTERVAL '%s days'
             UNION
             SELECT asin FROM product_queue
             WHERE campaign_id = $1 AND asin IS NOT NULL AND asin != ''
@@ -356,7 +367,7 @@ class CampaignManager:
             )
         ) DESC
         LIMIT $2;
-        """
+        """ % days
         async with self.db_pool.acquire() as conn:
             records = await conn.fetch(query, campaign_id, limit)
             return [record['asin'] for record in records]
@@ -700,6 +711,12 @@ class CampaignManager:
                 await self._notify_queue_ready(campaign_id, 0)
                 return 0
 
+            # If fewer than 6 subcategories, search more items per category
+            # This handles cases like selecting a full category (1 node) or few subcategories
+            num_nodes = len(browse_node_ids)
+            items_per_node = 30 if num_nodes < 6 else 10
+            print(f"🔍 Search strategy: {num_nodes} nodes × {items_per_node} items/node")
+
             # Search for products
             search_results = await amazon_paapi_client.search_items_enhanced(
                 browse_node_ids=browse_node_ids,
@@ -708,7 +725,8 @@ class CampaignManager:
                 fulfilled_by_amazon=params.get('fulfilled_by_amazon'),
                 max_sales_rank=params.get('max_sales_rank', 10000),
                 min_review_count=campaign.get('min_review_count', 0),
-                max_results=min(limit * 2, 50)  # Get more results to filter from
+                max_results=min(limit * 2, 50),
+                items_per_node=items_per_node  # Search multiple pages if needed
             )
 
             if not search_results:
@@ -833,6 +851,30 @@ class CampaignManager:
         async with self.db_pool.acquire() as conn:
             deleted_count = await conn.fetchval("SELECT COUNT(*) FROM product_queue WHERE status = 'queued' AND discovered_at < CURRENT_TIMESTAMP - INTERVAL '%s days';" % days)
             await conn.execute(query)
+            return deleted_count or 0
+
+    async def cleanup_old_statistics(self, days: int = 90):
+        """
+        Remove old statistics logs to save disk space.
+        Default is 90 days (buffer beyond 60-day duplicate detection window).
+        
+        Returns:
+            Number of deleted records.
+        """
+        async with self.db_pool.acquire() as conn:
+            # Count before delete
+            deleted_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM statistics_log WHERE post_time < CURRENT_TIMESTAMP - INTERVAL '%s days';" % days
+            )
+            
+            # Delete old records
+            await conn.execute(
+                "DELETE FROM statistics_log WHERE post_time < CURRENT_TIMESTAMP - INTERVAL '%s days';" % days
+            )
+            
+            if deleted_count and deleted_count > 0:
+                print(f"🧹 Cleaned up {deleted_count} old statistics records (older than {days} days)")
+            
             return deleted_count or 0
 
 # Глобальная переменная для CampaignManager будет инициализирована в main.py

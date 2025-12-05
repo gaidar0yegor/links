@@ -70,27 +70,22 @@ def escape_markdown_v2(text: str) -> str:
 def sanitize_markdown_text(text: str) -> str:
     """
     Санитизирует текст для безопасной отправки с parse_mode='Markdown'.
-    Удаляет/экранирует проблемные символы, сохраняя базовое форматирование.
+    Удаляет/экранирует проблемные символы, сохраняя ссылки.
     """
     if not text:
         return text
     
     # Находим все ссылки [text](url) и временно заменяем их
+    # Use unique placeholder without underscores to avoid conflicts
     link_pattern = r'\[([^\]]+)\]\(([^)]+)\)'
     links = re.findall(link_pattern, text)
     
-    # Заменяем ссылки на плейсхолдеры
+    # Заменяем ссылки на плейсхолдеры (без подчёркиваний!)
     placeholder_text = text
     for i, (link_text, url) in enumerate(links):
-        placeholder_text = placeholder_text.replace(f'[{link_text}]({url})', f'__LINK_{i}__')
-    
-    # Экранируем проблемные символы в основном тексте
-    # Для обычного Markdown (не V2) нужно экранировать: _ * [ ] ( ) ~ ` > # + - = | { } . !
-    # Но мы хотим сохранить базовое форматирование (* для bold, _ для italic)
-    # Поэтому экранируем только те, что ломают парсинг
+        placeholder_text = placeholder_text.replace(f'[{link_text}]({url})', f'<<<MDLINK{i}>>>')
     
     # Убираем непарные * и _ которые ломают Markdown
-    # Считаем количество каждого символа
     for char in ['*', '_']:
         count = placeholder_text.count(char)
         if count % 2 != 0:
@@ -104,7 +99,7 @@ def sanitize_markdown_text(text: str) -> str:
     
     # Восстанавливаем ссылки
     for i, (link_text, url) in enumerate(links):
-        placeholder_text = placeholder_text.replace(f'__LINK_{i}__', f'[{link_text}]({url})')
+        placeholder_text = placeholder_text.replace(f'<<<MDLINK{i}>>>', f'[{link_text}]({url})')
     
     return placeholder_text
 
@@ -521,7 +516,12 @@ class PostManager:
             text_content = base_text_content
             if final_link:
                 link_text = sheets_api.get_link_format()
-                text_content += f"\n\n[{link_text}]({final_link})"
+                # Escape parentheses in URL to prevent Markdown parsing issues
+                safe_link = final_link.replace('(', '%28').replace(')', '%29')
+                text_content += f"\n\n[{link_text}]({safe_link})"
+                print(f"🔗 Link: [{link_text}]({safe_link[:80]}...)")
+            else:
+                print(f"⚠️ No affiliate link available for {channel_name}")
 
             # Truncate content to Telegram's caption limit (1024 chars)
             if len(text_content) > 1024:
@@ -727,7 +727,12 @@ class PostManager:
             text_content = base_text_content
             if final_link:
                 link_text = sheets_api.get_link_format()
-                text_content += f"\n\n[{link_text}]({final_link})"
+                # Escape parentheses in URL to prevent Markdown parsing issues
+                safe_link = final_link.replace('(', '%28').replace(')', '%29')
+                text_content += f"\n\n[{link_text}]({safe_link})"
+                print(f"🔗 Link: [{link_text}]({safe_link[:80]}...)")
+            else:
+                print(f"⚠️ No affiliate link available for {channel_name}")
 
             # Truncate content to Telegram's caption limit (1024 chars)
             if len(text_content) > 1024:

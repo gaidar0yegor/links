@@ -62,7 +62,6 @@ class AmazonProductScraper:
 
         try:
             url = f"{self.base_url}/dp/{asin}"
-            print(f"DEBUG: Scraping product page: {url}")
 
             async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as response:
                 if response.status != 200:
