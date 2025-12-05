@@ -543,13 +543,13 @@ class AmazonPAAPIClient:
             reviews = product.get('customer_reviews', {}).get('count', 'N/A') if product.get('customer_reviews') else 'N/A'
             link = product.get('detail_page_url', 'N/A')
             image = product.get('images', {}).get('primary', {}).get('large', {}).get('url', 'N/A')
-            
+
             sales_rank = product.get('browse_node_info', {}).get('website_sales_rank', 'N/A')
             if isinstance(sales_rank, dict):
                 sales_rank = sales_rank.get('sales_rank', 'N/A')
-            
+
             rating = product.get('customer_reviews', {}).get('star_rating', {}).get('rating', 'N/A') if product.get('customer_reviews', {}).get('star_rating') else 'N/A'
-            
+
             features = product.get('item_info', {}).get('features', {}).get('display_values', [])
             description = ' '.join(features[:3]) if features else ''
             
@@ -1072,6 +1072,11 @@ class AmazonPAAPIClient:
 
                         if response and hasattr(response, 'search_result') and response.search_result:
                             items = getattr(response.search_result, 'items', None) or []
+                            
+                            if not items:
+                                # No more results, stop searching this node
+                                print(f"📭 Node {node_id} page {page_num}: no results, stopping")
+                                break
 
                             for item in items:
                                 asin = getattr(item, 'asin', '')
@@ -1079,7 +1084,7 @@ class AmazonPAAPIClient:
                                 if asin and len(asin) == 10 and asin not in node_asins:
                                     node_asins.append(asin)
                         else:
-                            # No more results, stop searching this node
+                            # No response, stop searching this node
                             print(f"📭 Node {node_id} page {page_num}: no results, stopping")
                             break
 

@@ -188,14 +188,9 @@ class ContentGenerator:
             full_post_content = await self._generate_full_post_with_ai(product_data, content, language)
 
             if not full_post_content:
-                # Fallback if AI generation fails
-                print(f"DEBUG: ContentGenerator - AI generation returned None, using fallback")
-                # Build a simple fallback content block
-                features = product_data.get('features') or product_data.get('Features', [])
-                feature_bullets = ""
-                if features and isinstance(features, list) and len(features) > 0:
-                    feature_bullets = "\n\n" + "\n".join(f"• {feature.strip()}" for feature in features[:3])
-                full_post_content = content + feature_bullets
+                # AI generation failed - skip posting instead of using broken fallback
+                print(f"⚠️ ContentGenerator - AI generation failed, skipping post (GPT unavailable)")
+                return None
 
             return {
                 'content': full_post_content,
@@ -275,38 +270,9 @@ Price: {product_data.get('Price', product_data.get('price', 'N/A'))}{feature_tex
             content_result = await self.generate_content(product_data, category=category, language=language)
 
             if not content_result:
-                # Return fallback content if generation failed - include price if available
-                title = product_data.get('Title', product_data.get('title', 'Amazing Product'))
-                price_raw = (product_data.get('Price') or product_data.get('price'))
-                price_text = ""
-                if price_raw is not None and price_raw != '' and price_raw != 'None':
-                    try:
-                        from decimal import Decimal
-                        if isinstance(price_raw, (int, float, Decimal)):
-                            price_text = f"💰 **Price: €{float(price_raw):.2f}**\n\n"
-                        else:
-                            price_clean = str(price_raw).replace('€', '').replace(',', '.').strip()
-                            try:
-                                price_val = float(price_clean)
-                                price_text = f"💰 **Price: €{price_val:.2f}**\n\n"
-                            except (ValueError, TypeError):
-                                if str(price_raw).startswith('€'):
-                                    price_text = f"💰 **Price: {price_raw}**\n\n"
-                    except (ValueError, TypeError):
-                        pass
-
-                return {
-                    'text': f"✨ **GREAT DEAL!** {title}\n\n{price_text}Check out this amazing product!",
-                    'hashtags': '',
-                    'product_name': product_data.get('Title', product_data.get('title', '')),
-                    'product_link': product_data.get('AffiliateLink', product_data.get('affiliate_link', '')),
-                    'product_images': product_data.get('ImageURLs', product_data.get('image_urls', [])),
-                    'rating': product_data.get('Rating', product_data.get('rating', '')),
-                    'reviews_count': product_data.get('ReviewsCount', product_data.get('review_count', '')),
-                    'features': product_data.get('features', []),
-                    'category': 'General',
-                    'template_id': 'fallback'
-                }
+                # AI generation failed - return None to skip posting
+                print(f"⚠️ generate_post_content: AI failed, returning None to skip post")
+                return None
 
             # Add additional metadata, including features
             post_data = {
@@ -326,19 +292,8 @@ Price: {product_data.get('Price', product_data.get('price', 'N/A'))}{feature_tex
 
         except Exception as e:
             bot_logger.log_error("ContentGenerator", e, "generate_post_content failed completely")
-            # Ultimate fallback
-            return {
-                'text': f"✨ **GREAT DEAL!** {product_data.get('Title', product_data.get('title', 'Amazing Product'))}\n\nCheck out this amazing product!",
-                'hashtags': '',
-                'product_name': product_data.get('Title', product_data.get('title', '')),
-                'product_link': product_data.get('AffiliateLink', product_data.get('affiliate_link', '')),
-                'product_images': product_data.get('ImageURLs', product_data.get('image_urls', [])),
-                'rating': product_data.get('Rating', product_data.get('rating', '')),
-                'reviews_count': product_data.get('ReviewsCount', product_data.get('review_count', '')),
-                'features': product_data.get('features', []),
-                'category': 'General',
-                'template_id': 'fallback'
-            }
+            # Return None to skip posting on error
+            return None
 
 
 # Global instance - lazy initialization
