@@ -39,12 +39,12 @@ class CampaignScheduler:
             misfire_grace_time=300  # 5 минут на запуск пропущенной задачи
         )
 
-        # Новая задача: автоматическое обнаружение и очередь продуктов (каждые 6 часов)
+        # Новая задача: автоматическое обнаружение и очередь продуктов (каждые 5 часов)
         italy_tz = ZoneInfo("Europe/Rome")
         self.scheduler.add_job(
             self.product_discovery_cycle,
             'interval',
-            hours=0.6,
+            hours=5,
             id='product_discovery_cycle',
             replace_existing=True,
             misfire_grace_time=3600,  # 1 час на запуск пропущенной задачи
