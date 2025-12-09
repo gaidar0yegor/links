@@ -790,18 +790,30 @@ class CampaignManager:
             posted_asins = await self.get_posted_asins(campaign_id, limit=5000)
 
             queued_count = 0
-            for product in search_results:
+            
+            # Статистика фильтрации
+            skip_stats = {
+                "duplicate": 0,
+                "low_reviews": 0,
+                "queue_limit": 0,
+                "error": 0
+            }
+            
+            for idx, product in enumerate(search_results):
                 # Stop if we've reached the desired queue size
                 if await self.get_queue_size(campaign_id) >= limit:
+                    skip_stats["queue_limit"] = len(search_results) - idx
                     break
 
                 asin = product.get('asin')
                 if not asin or asin in posted_asins:
+                    skip_stats["duplicate"] += 1
                     continue
 
                 # Apply review count filter (new feature)
                 review_count = product.get('review_count', 0)
                 if min_review_count > 0 and review_count < min_review_count:
+                    skip_stats["low_reviews"] += 1
                     continue
 
                 # Prepare product data
@@ -823,8 +835,15 @@ class CampaignManager:
                     queued_count += 1
                     print(f"✅ Added {asin} to queue (rank: {product.get('sales_rank')}, reviews: {review_count})")
                 except Exception as e:
+                    skip_stats["error"] += 1
                     print(f"❌ Failed to add {asin} to queue: {e}")
 
+            # Подробная статистика
+            print(f"📊 Статистика наполнения очереди кампании {campaign_id}:")
+            print(f"   📥 Получено: {len(search_results)} | ✅ Добавлено: {queued_count}")
+            print(f"   ⏭️ Пропущено: дубликаты={skip_stats['duplicate']}, мало отзывов={skip_stats['low_reviews']}, "
+                  f"лимит очереди={skip_stats['queue_limit']}, ошибки={skip_stats['error']}")
+            
             print(f"🎉 Populated queue for campaign {campaign_id} with {queued_count} products")
             
             # Определяем финальный статус
