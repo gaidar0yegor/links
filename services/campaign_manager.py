@@ -761,9 +761,9 @@ class CampaignManager:
             if num_nodes == 1:
                 items_per_node = 100  # Max possible for single category
             elif num_nodes < 6:
-                items_per_node = 50   # More items for few categories
+                items_per_node = 70   # More items for few categories
             else:
-                items_per_node = 10   # Default for many categories
+                items_per_node = 40   # Default for many categories
             print(f"🔍 Search strategy: {num_nodes} nodes × {items_per_node} items/node")
 
             # Search for products
