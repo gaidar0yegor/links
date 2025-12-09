@@ -5,6 +5,7 @@ Handles content generation using Google Sheets templates and AI rewriting.
 """
 
 import random
+import re
 from typing import Dict, List, Optional, Any
 from services.sheets_api import sheets_api
 from services.llm_client import OpenAIClient
@@ -73,6 +74,9 @@ class ContentGenerator:
 
     def get_random_template(self, category: str) -> Optional[Dict[str, str]]:
         """Get a random template for the specified category."""
+        # Reload templates from Google Sheets on every request
+        self._load_templates()
+        
         if category not in self.templates_cache:
             # Try to find a generic template or fallback
             if 'Electronics' in self.templates_cache:
@@ -173,16 +177,27 @@ class ContentGenerator:
                             product_data.get('affiliate_link') or
                             product_data.get('affiliate_link', '#'))
 
-            # Format the template first
+            # Format the template with safe replacement (missing placeholders become empty)
             template_text = template['text']
-            content = template_text.format(
-                product_name=product_name,
-                rating=rating,
-                reviews_count=reviews_count,
-                affiliate_link=affiliate_link,
-                price=price,
-                hashtags=''  # Add dummy value for backward compatibility with old templates
-            )
+            placeholders = {
+                'product_name': product_name,
+                'rating': rating,
+                'reviews_count': reviews_count,
+                'affiliate_link': affiliate_link,
+                'price': price,
+                'hashtags': '',
+                'category': category or '',
+            }
+            
+            # Safe formatting - replace known placeholders, unknown ones become empty
+            def safe_format(text: str, **kwargs) -> str:
+                for key, value in kwargs.items():
+                    text = text.replace(f'{{{key}}}', str(value) if value else '')
+                # Remove any remaining {placeholder} that we don't know about
+                text = re.sub(r'\{[a-zA-Z_][a-zA-Z0-9_]*\}', '', text)
+                return text
+            
+            content = safe_format(template_text, **placeholders)
 
             # Use AI to generate the entire post, including features and hashtags
             full_post_content = await self._generate_full_post_with_ai(product_data, content, language)
@@ -213,11 +228,26 @@ class ContentGenerator:
             else:
                 base_prompt = "Rewrite the provided text to be an engaging and persuasive social media post."
 
-            # Build comprehensive product information, including features
+            # Build comprehensive product information, including features or description
             features = product_data.get('features') or product_data.get('Features', [])
+            description = product_data.get('description') or product_data.get('Description', '')
+            title = product_data.get('title') or product_data.get('Title', '')
+            
             feature_text = ""
             if features and isinstance(features, list) and len(features) > 0:
+                # Use features (preferred)
                 feature_text = "\nKey Features:\n" + "\n".join(f"- {feature.strip()}" for feature in features)
+            elif description and isinstance(description, str) and len(description.strip()) > 10:
+                # Fallback to description if no features
+                feature_text = f"\nProduct Description:\n{description.strip()}"
+            elif title and len(title) > 100:
+                # Long title can work as description fallback
+                feature_text = f"\nProduct: {title}"
+                print(f"ℹ️ ContentGenerator: Using long title as content source (len={len(title)})")
+            else:
+                # Neither features, description, nor long title - cannot generate quality content
+                print(f"⚠️ ContentGenerator: No features/description and title too short ({len(title)} chars), skipping")
+                return None
 
             product_info = f"""
 ---
@@ -235,8 +265,8 @@ Price: {product_data.get('Price', product_data.get('price', 'N/A'))}{feature_tex
                 "1. Take the 'PRODUCT INFORMATION' provided and the 'BASE CONTENT' style guide.\n"
                 "2. Create a complete, social media post.\n"
                 "3. IMPORTANT: The entire response, including hashtags, MUST be in the target language.\n"
-                "4. Naturally integrate the key features, price, and rating into the post ONLY if requested in the style guide.\n"
-                "6. Do not include a placeholder for the link; it will be added later.\n\n"
+                "4. Do not include a placeholder for the link; it will be added later.\n"
+                "5. CRITICAL: Only use features/information from the PRODUCT INFORMATION section. DO NOT invent or make up any features, specifications, or product details.\n\n"
                 f"{product_info}\n\n"
                 f"BASE CONTENT (use this as a style guide):\n{base_content}"
             )

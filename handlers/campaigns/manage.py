@@ -118,33 +118,20 @@ async def enter_campaign_module(callback: CallbackQuery, state: FSMContext, camp
         parse_mode="HTML"
     )
 
-@router.callback_query(F.data.startswith("campaign_edit:"), StateFilter("*"))
-async def enter_campaign_edit_menu(callback: CallbackQuery, state: FSMContext):
-    """Открывает меню редактирования/управления конкретной кампанией."""
-    await state.clear()  # Clear state when returning to this menu
-
-    print(f"🎯 Campaign edit clicked: {callback.data}")
-
-    # Извлекаем ID кампании
-    try:
-        campaign_id = int(callback.data.split(":")[1])
-        print(f"📋 Extracted campaign ID: {campaign_id}")
-    except (ValueError, IndexError) as e:
-        print(f"❌ Error parsing campaign ID from {callback.data}: {e}")
-        await callback.answer("❌ Invalid campaign ID", show_alert=True)
-        return
-
-    # Get full campaign details including all new parameters
+async def show_campaign_summary(query_or_message: CallbackQuery | Message, state: FSMContext, campaign_id: int):
+    """Показывает саммари кампании. Работает как с CallbackQuery, так и с Message."""
+    message = query_or_message.message if isinstance(query_or_message, CallbackQuery) else query_or_message
+    
+    await state.clear()
+    
     campaign_mgr = get_campaign_manager()
     campaign = await campaign_mgr.get_campaign_details_full(campaign_id) if campaign_mgr else None
 
     if not campaign:
-        await callback.answer("❌ Кампания не найдена.", show_alert=True)
-        await enter_campaign_module(callback, state) # Вернуться в главное меню кампаний
+        await message.answer("❌ Кампания не найдена.")
         return
 
     await state.set_state(CampaignStates.campaign_edit_main)
-    # Сохраняем ID для последующих операций
     await state.set_data({'current_campaign_id': campaign_id})
 
     # Get queue size for display
@@ -190,10 +177,8 @@ async def enter_campaign_edit_menu(callback: CallbackQuery, state: FSMContext):
         f"<b>📊 Параметры фильтрации:</b>\n"
         f"⭐ <b>Мин. рейтинг:</b> {params.get('min_rating', 'Не задан')}\n"
         f"💰 <b>Мин. цена:</b> {'€' + str(params.get('min_price')) if params.get('min_price') else 'Не задана'}\n"
-        f"📈 <b>Макс. рейтинг продаж:</b> {sales_rank_display}\n"
         f"🚚 <b>FBA:</b> {fba_display}\n"
         f"📝 <b>Мин. отзывы:</b> {campaign.get('min_review_count', 0)}\n\n"
-
         f"<b>🎯 Цели и каналы:</b>\n"
         f"📺 <b>Каналы:</b> {', '.join(params.get('channels', []))}\n"
         f"🏷️ <b>Категории:</b> {', '.join(params.get('categories', []))}\n"
@@ -220,12 +205,30 @@ async def enter_campaign_edit_menu(callback: CallbackQuery, state: FSMContext):
 
     text += "\n<b>Выберите действие:</b>"
 
-    await callback.message.edit_text(
-        text,
-        reply_markup=get_campaign_edit_keyboard(campaign_id, campaign['status']),
-        parse_mode="HTML"
-    )
-    await callback.answer()
+    keyboard = get_campaign_edit_keyboard(campaign_id, campaign['status'])
+    
+    if isinstance(query_or_message, CallbackQuery):
+        await message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+        await query_or_message.answer()
+    else:
+        await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+
+
+@router.callback_query(F.data.startswith("campaign_edit:"), StateFilter("*"))
+async def enter_campaign_edit_menu(callback: CallbackQuery, state: FSMContext):
+    """Открывает меню редактирования/управления конкретной кампанией."""
+    print(f"🎯 Campaign edit clicked: {callback.data}")
+
+    # Извлекаем ID кампании
+    try:
+        campaign_id = int(callback.data.split(":")[1])
+        print(f"📋 Extracted campaign ID: {campaign_id}")
+    except (ValueError, IndexError) as e:
+        print(f"❌ Error parsing campaign ID from {callback.data}: {e}")
+        await callback.answer("❌ Invalid campaign ID", show_alert=True)
+        return
+
+    await show_campaign_summary(callback, state, campaign_id)
 
 @router.callback_query(F.data.startswith("campaign_status:"))
 async def toggle_campaign_status(callback: CallbackQuery, state: FSMContext):
@@ -317,7 +320,7 @@ async def edit_campaign_timings(query_or_message: CallbackQuery | Message, state
     message_text = (
         f"<b>🗓️ Настройка Времени Постинга для '{campaign_name}'</b>\n"
         f"\n<b>Текущие настройки:</b>{timings_text}\n\n"
-        "Выберите дни, для которых вы хотите установить или изменить время. "
+        "Выберите дни, для которых вы хотите установить или изменить время (по Итальянскому часовому поясу). "
         "Нажмите 'Готово', когда закончите выбор."
     )
 
@@ -404,7 +407,7 @@ async def timing_days_done(callback: CallbackQuery, state: FSMContext):
 
     await callback.message.edit_text(
         f"<b>🕒 Выбраны дни:</b> {', '.join(selected_day_names)}\n\n"
-        "Теперь введите <b>время начала</b> для этих дней.\n"
+        "Теперь введите <b>время начала</b> для этих дней (по Итальянскому часовому поясу).\n"
         "Формат: <b>HH:MM</b> (например, 09:00)",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="⬅️ Назад", callback_data=f"campaign_edit_timings:{data['campaign_id']}")]
@@ -423,7 +426,7 @@ async def timing_input_start(message: Message, state: FSMContext):
         datetime.strptime(start_time_str, "%H:%M").time()
         await state.update_data(start_time=start_time_str)  # Store the string
         await state.set_state(CampaignStates.timing_input_end)
-        await message.answer(f"✅ Время начала: <b>{start_time_str}</b>. Теперь введите <b>время окончания</b> (HH:MM):", parse_mode="HTML")
+        await message.answer(f"✅ Время начала: <b>{start_time_str}</b>. Теперь введите <b>время окончания (по Итальянскому часовому поясу)</b> (HH:MM):", parse_mode="HTML")
     except ValueError:
         await message.answer("❌ Неверный формат времени. Введите время в формате <b>HH:MM</b> (например, 09:00):", parse_mode="HTML")
 
@@ -464,8 +467,8 @@ async def timing_input_end(message: Message, state: FSMContext):
             parse_mode="HTML"
         )
 
-        await state.clear()
-        await edit_campaign_timings(message, state, campaign_id)
+        # После сохранения таймингов показываем саммари кампании
+        await show_campaign_summary(message, state, campaign_id)
 
     except ValueError:
         await message.answer("❌ Неверный формат времени. Введите время в формате <b>HH:MM</b> (например, 23:30):", parse_mode="HTML")

@@ -623,15 +623,52 @@ class CampaignManager:
             )
             return product_id
 
+    async def add_product_with_displacement(self, campaign_id: int, product_data: Dict[str, Any], max_queue_size: int = 200) -> str:
+        """
+        Add product to queue with smart displacement.
+        If queue is full and new product has better sales rank than the worst product,
+        the worst product is removed and the new one is added.
+        
+        Returns: 'added', 'displaced', or 'rejected'
+        """
+        queue_size = await self.get_queue_size(campaign_id)
+        new_rank = product_data.get('sales_rank') or 999999
+        asin = product_data.get('asin', 'unknown')
+        
+        if queue_size < max_queue_size:
+            await self.add_product_to_queue(campaign_id, product_data)
+            print(f"📥 Added {asin} (rank: {new_rank}) - queue: {queue_size + 1}/{max_queue_size}")
+            return 'added'
+        
+        # Queue is full - find the worst product (highest sales rank)
+        worst_query = """
+        SELECT id, asin, sales_rank FROM product_queue 
+        WHERE campaign_id = $1 AND status = 'queued'
+        ORDER BY sales_rank DESC NULLS FIRST
+        LIMIT 1;
+        """
+        async with self.db_pool.acquire() as conn:
+            worst = await conn.fetchrow(worst_query, campaign_id)
+            
+            if worst and (worst['sales_rank'] is None or new_rank < worst['sales_rank']):
+                # New product is better - displace the worst one
+                await conn.execute("DELETE FROM product_queue WHERE id = $1", worst['id'])
+                await self.add_product_to_queue(campaign_id, product_data)
+                print(f"🔄 Displaced {worst['asin']} (rank: {worst['sales_rank']}) with {asin} (rank: {new_rank})")
+                return 'displaced'
+        
+        print(f"❌ Rejected {asin} (rank: {new_rank}) - worse than queue minimum")
+        return 'rejected'
+
     async def get_next_queued_product(self, campaign_id: int) -> Dict[str, Any] | None:
         """
         Get the next product from the queue for a specific campaign.
-        Returns the oldest queued product.
+        Returns the product with the best (lowest) sales rank.
         """
         query = """
         SELECT * FROM product_queue
         WHERE campaign_id = $1 AND status = 'queued'
-        ORDER BY discovered_at ASC
+        ORDER BY sales_rank ASC NULLS LAST
         LIMIT 1;
         """
 
@@ -667,19 +704,26 @@ class CampaignManager:
             count = await conn.fetchval(query, campaign_id)
             return count or 0
 
-    async def populate_queue_for_campaign(self, campaign_id: int, limit: int = 200):
+    async def populate_queue_for_campaign(self, campaign_id: int, limit: int = 200, restore_status: str = 'stopped'):
         """
-        Immediately populate the product queue for a newly created campaign.
-        This addresses the issue where campaigns previously waited 6 hours.
+        Immediately populate the product queue for a campaign.
+        
+        Args:
+            campaign_id: ID of the campaign
+            limit: Maximum number of products to queue
+            restore_status: Status to set after completion ('stopped' for new campaigns, 'running' for active ones)
         """
         try:
+            # Mark as 'preparing' to prevent parallel population attempts
+            await self.update_status(campaign_id, 'preparing')
+            
             # Get campaign details
             campaign = await self.get_campaign_details_full(campaign_id)
             if not campaign:
                 print(f"❌ Campaign {campaign_id} not found for queue population")
                 # FIX: Меняем статус, чтобы не застрять в 'preparing'
                 try:
-                    await self.update_status(campaign_id, 'stopped')
+                    await self.update_status(campaign_id, restore_status)
                 except:
                     pass
                 return 0
@@ -688,7 +732,7 @@ class CampaignManager:
             current_queue_size = await self.get_queue_size(campaign_id)
             if current_queue_size >= limit:
                 print(f"✅ Campaign {campaign_id} already has {current_queue_size} products in queue")
-                await self.update_status(campaign_id, 'stopped')
+                await self.update_status(campaign_id, restore_status)
                 return current_queue_size
 
             print(f"🔄 Populating queue for campaign {campaign['name']} (ID: {campaign_id})")
@@ -698,7 +742,7 @@ class CampaignManager:
                 from services.amazon_paapi_client import amazon_paapi_client
             except ImportError:
                 print(f"⚠️  Amazon PA API client not available, skipping queue population")
-                await self.update_status(campaign_id, 'stopped')
+                await self.update_status(campaign_id, restore_status)
                 await self._notify_queue_ready(campaign_id, 0)
                 return 0
 
@@ -707,14 +751,19 @@ class CampaignManager:
 
             if not browse_node_ids:
                 print(f"⚠️  No browse_node_ids for campaign {campaign_id}, skipping queue population")
-                await self.update_status(campaign_id, 'stopped')
+                await self.update_status(campaign_id, restore_status)
                 await self._notify_queue_ready(campaign_id, 0)
                 return 0
 
-            # If fewer than 6 subcategories, search more items per category
-            # This handles cases like selecting a full category (1 node) or few subcategories
+            # Adaptive search strategy based on number of selected categories
+            # Amazon API limit: max 100 items per browse node (10 pages × 10 items)
             num_nodes = len(browse_node_ids)
-            items_per_node = 30 if num_nodes < 6 else 10
+            if num_nodes == 1:
+                items_per_node = 100  # Max possible for single category
+            elif num_nodes < 6:
+                items_per_node = 50   # More items for few categories
+            else:
+                items_per_node = 10   # Default for many categories
             print(f"🔍 Search strategy: {num_nodes} nodes × {items_per_node} items/node")
 
             # Search for products
@@ -730,7 +779,8 @@ class CampaignManager:
             )
 
             if not search_results:
-                print(f"❌ No products found for campaign {campaign_id}")
+                print(f"❌ No products found for campaign {campaign_id} - stopping campaign")
+                # ВАЖНО: Ставим 'stopped', чтобы не было бесконечного цикла поиска
                 await self.update_status(campaign_id, 'stopped')
                 await self._notify_queue_ready(campaign_id, 0)
                 return 0
@@ -777,9 +827,16 @@ class CampaignManager:
 
             print(f"🎉 Populated queue for campaign {campaign_id} with {queued_count} products")
             
-            # После завершения сбора очереди меняем статус на 'stopped' (готова к запуску)
-            await self.update_status(campaign_id, 'stopped')
-            print(f"✅ Campaign {campaign_id} status changed to 'stopped' (ready to run)")
+            # Определяем финальный статус
+            if queued_count == 0:
+                # Ничего не добавлено в очередь - останавливаем, чтобы не было бесконечного цикла
+                final_status = 'stopped'
+                print(f"⚠️ No products added to queue - stopping campaign to prevent infinite loop")
+            else:
+                final_status = restore_status
+            
+            await self.update_status(campaign_id, final_status)
+            print(f"✅ Campaign {campaign_id} status changed to '{final_status}'")
             
             # Уведомляем пользователя о готовности кампании
             await self._notify_queue_ready(campaign_id, queued_count)
@@ -790,7 +847,7 @@ class CampaignManager:
             print(f"❌ Failed to populate queue for campaign {campaign_id}: {e}")
             # В случае ошибки тоже меняем статус, чтобы не застрять в preparing
             try:
-                await self.update_status(campaign_id, 'stopped')
+                await self.update_status(campaign_id, restore_status)
             except:
                 pass
             return 0
@@ -824,13 +881,18 @@ class CampaignManager:
                 )
             else:
                 message = (
-                    f"⚠️ <b>Кампания создана, но очередь пуста!</b>\n\n"
+                    f"⚠️ <b>Не удалось найти товары!</b>\n\n"
                     f"📋 Кампания: <b>{campaign_name}</b>\n"
-                    f"📦 Товаров найдено: <b>0</b>\n\n"
+                    f"📦 Товаров найдено: <b>0</b>\n"
+                    f"🛑 Статус: <b>Остановлена</b>\n\n"
                     f"Возможные причины:\n"
-                    f"• Слишком строгие фильтры (Sales Rank, мин. отзывы)\n"
-                    f"• Нет товаров в выбранных категориях\n\n"
-                    f"Попробуйте ослабить фильтры или дождитесь автопоиска через 6 часов."
+                    f"• Слишком строгие фильтры (рейтинг, мин. отзывы)\n"
+                    f"• Нет товаров в выбранных категориях\n"
+                    f"• Все найденные товары уже были опубликованы\n\n"
+                    f"💡 Попробуйте:\n"
+                    f"• Изменить категории или добавить новые\n"
+                    f"• Снизить требования к рейтингу/отзывам\n"
+                    f"• Запустить кампанию позже (новые товары появятся)"
                 )
             
             await self._bot.send_message(chat_id=user_id, text=message, parse_mode="HTML")

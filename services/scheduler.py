@@ -1,4 +1,5 @@
 # services/scheduler.py
+import asyncio
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -162,10 +163,29 @@ class CampaignScheduler:
                 print(f"✅ Продукт из очереди опубликован: {queued_product['asin']}")
 
             else:
-                print(f"📭 Очередь пуста для кампании '{selected_campaign['name']}'. Используем поиск в реальном времени...")
+                # Queue empty - trigger population
+                # Note: Parallel runs are prevented because:
+                # 1. populate_queue sets status to 'preparing' immediately
+                # 2. get_active_campaigns_with_timings() only returns 'running' campaigns
+                # 3. So next cycle won't see this campaign until population completes
+                print(f"📭 Очередь пуста для кампании '{selected_campaign['name']}'. Запускаем наполнение очереди...")
 
-                # 4b. Fallback: Запуск основного процесса постинга (поиск в реальном времени)
-                await self.post_manager.fetch_and_post_enhanced(selected_campaign)
+                # 4b. Trigger queue population instead of live search (more reliable)
+                # This will populate the queue in background, next cycle will have products
+                try:
+                    # Run queue population as background task (don't block posting cycle)
+                    # restore_status='running' to keep campaign active after population
+                    asyncio.create_task(
+                        self.campaign_manager.populate_queue_for_campaign(
+                            selected_campaign['id'], limit=200, restore_status='running'
+                        )
+                    )
+                    print(f"🔄 Запущено фоновое наполнение очереди для '{selected_campaign['name']}'. Пост будет в следующем цикле.")
+                except Exception as e:
+                    print(f"❌ Ошибка запуска наполнения очереди: {e}")
+                
+                # Skip posting this cycle - queue needs to fill first
+                continue
 
             # 5. Обновление времени последнего поста
             await self.campaign_manager.mark_last_post_time(selected_campaign['id'], datetime.now())
@@ -232,9 +252,9 @@ class CampaignScheduler:
             queue_size = await self.campaign_manager.get_queue_size(campaign_id)
             print(f"📊 Кампания '{campaign_name}' (ID: {campaign_id}): очередь содержит {queue_size} продуктов")
 
-            # Если очередь достаточно большая (минимум 20 продуктов), пропускаем
-            if queue_size >= 20:
-                print(f"⏭️  Кампания '{campaign_name}': очередь достаточно полная, пропускаем")
+            # Если очередь достаточно большая (минимум 50 продуктов), пропускаем
+            if queue_size >= 50:
+                print(f"⏭️  Кампания '{campaign_name}': очередь достаточно полная ({queue_size}/200), пропускаем")
                 continue
 
             # Определяем параметры поиска
@@ -242,15 +262,26 @@ class CampaignScheduler:
             min_rating = params.get('min_rating', 0.0)
             min_price = params.get('min_price')
             fulfilled_by_amazon = params.get('fulfilled_by_amazon')
-            # Get campaign-specific sales rank threshold (simplified quality control)
-            max_sales_rank = params.get('max_sales_rank', 10000)
+            # Fixed sales rank cutoff - simplified system (no user selection)
+            max_sales_rank = 10000
             min_review_count = params.get('min_review_count', 0)
 
             if not browse_node_ids:
                 print(f"⚠️  Кампания '{campaign_name}': нет browse_node_ids, пропускаем")
                 continue
 
-            print(f"🔎 Поиск продуктов для кампании '{campaign_name}' в категориях: {browse_node_ids} (max rank: {max_sales_rank})")
+            # Determine items_per_node based on number of categories
+            # Fewer categories = more items per category for variety
+            num_nodes = len(browse_node_ids)
+            if num_nodes == 1:
+                items_per_node = 100  # Single category - maximum variety
+            elif num_nodes < 6:
+                items_per_node = 30   # Few categories - more items each
+            else:
+                items_per_node = 10   # Many categories - standard amount
+            
+            rating_str = f"⭐{min_rating}+" if min_rating else "любой"
+            print(f"🔎 Поиск продуктов для кампании '{campaign_name}' в {num_nodes} категориях ({items_per_node} товаров/категорию, рейтинг: {rating_str})")
 
             try:
                 # Get already queued/posted ASINs to avoid duplicates
@@ -264,7 +295,8 @@ class CampaignScheduler:
                     fulfilled_by_amazon=fulfilled_by_amazon,
                     max_sales_rank=max_sales_rank,
                     min_review_count=min_review_count,
-                    max_results=50  # Increased from 10 to 50 to find more new products
+                    max_results=100,  # Increased to get more products
+                    items_per_node=items_per_node  # Dynamic based on category count
                 )
 
                 if not search_results:
@@ -272,16 +304,33 @@ class CampaignScheduler:
                     continue
 
                 queued_for_campaign = 0
+                
+                # Статистика фильтрации
+                skip_stats = {
+                    "duplicate": 0,
+                    "no_rank": 0,
+                    "low_rank": 0,
+                    "queue_full": 0,
+                    "error": 0
+                }
 
                 # Обрабатываем каждый найденный продукт
                 for product in search_results:
+                    asin = product.get('asin')
+                    
                     # Skip if already posted or queued
-                    if product.get('asin') in posted_asins:
+                    if asin in posted_asins:
+                        skip_stats["duplicate"] += 1
                         continue
+                        
                     # Применяем фильтр по sales rank (единственный критерий качества)
                     sales_rank = product.get('sales_rank')
-                    if sales_rank is None or sales_rank > max_sales_rank:
-                        continue  # Пропускаем продукты с низким рейтингом продаж
+                    if sales_rank is None:
+                        skip_stats["no_rank"] += 1
+                        continue
+                    if sales_rank > max_sales_rank:
+                        skip_stats["low_rank"] += 1
+                        continue
 
                     # Подготавливаем данные для очереди
                     product_data = {
@@ -298,17 +347,25 @@ class CampaignScheduler:
                         'features': product.get('features', [])  # FIX: добавлено для полноценных постов
                     }
 
-                    # Добавляем продукт в очередь
+                    # Добавляем продукт в очередь с логикой вытеснения
                     try:
-                        product_id = await self.campaign_manager.add_product_to_queue(campaign_id, product_data)
-                        queued_for_campaign += 1
-                        total_queued += 1
-                        print(f"✅ Добавлен продукт {product['asin']} (rank: {sales_rank}) в очередь кампании '{campaign_name}'")
+                        result = await self.campaign_manager.add_product_with_displacement(
+                            campaign_id, product_data, max_queue_size=200
+                        )
+                        if result in ('added', 'displaced'):
+                            queued_for_campaign += 1
+                            total_queued += 1
+                        elif result == 'rejected':
+                            skip_stats["queue_full"] += 1  # rejected = очередь полна и товар хуже
                     except Exception as e:
-                        print(f"❌ Ошибка добавления продукта {product['asin']}: {e}")
+                        skip_stats["error"] += 1
                         continue
 
-                print(f"📈 Кампания '{campaign_name}': добавлено {queued_for_campaign} продуктов в очередь")
+                # Выводим подробную статистику
+                print(f"📊 Кампания '{campaign_name}' - статистика:")
+                print(f"   📥 Получено: {len(search_results)} | ✅ Добавлено: {queued_for_campaign}")
+                print(f"   ⏭️ Пропущено: дубликаты={skip_stats['duplicate']}, нет ранга={skip_stats['no_rank']}, "
+                      f"ранг>{max_sales_rank}={skip_stats['low_rank']}, очередь полна={skip_stats['queue_full']}, ошибки={skip_stats['error']}")
 
             except Exception as e:
                 print(f"❌ Ошибка поиска для кампании '{campaign_name}': {e}")

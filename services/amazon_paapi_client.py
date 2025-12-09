@@ -552,7 +552,6 @@ class AmazonPAAPIClient:
 
             features = product.get('item_info', {}).get('features', {}).get('display_values', [])
             description = ' '.join(features[:3]) if features else ''
-            
             asin = product.get('asin', '')
 
         return {
@@ -1045,13 +1044,14 @@ class AmazonPAAPIClient:
                             page_num = page_offset + 1  # Sequential: 1, 2, 3
                         else:
                             page_num = random.randint(1, 5)  # Random for single page
-                        
-                        # Create search request
+
+                        # Create search request with Keywords='*' to enable rating filter
                         search_request = SearchItemsRequest(
                             partner_tag=self.associate_tag,
                             partner_type=PartnerType.ASSOCIATES,
                             marketplace="www.amazon.it",
                             browse_node_id=node_id,
+                            keywords="*",  # Wildcard enables min_reviews_rating filter
                             search_index="All",
                             item_page=page_num,
                             item_count=10,  # Max per page
@@ -1063,9 +1063,15 @@ class AmazonPAAPIClient:
                             ],
                         )
 
-                        # Apply basic filters
+                        # Apply filters
                         if min_price:
                             search_request.min_price = int(min_price * 100)  # Convert to cents
+                        
+                        # Apply rating filter (requires keywords to be set)
+                        if min_rating and min_rating > 0:
+                            min_rating_int = max(1, min(int(min_rating), 5))  # Clamp 1-5
+                            search_request.min_reviews_rating = min_rating_int
+                            print(f"  🌟 Rating filter applied: min {min_rating_int} stars")
 
                         # Execute search
                         response = self.api_client.search_items(search_request)

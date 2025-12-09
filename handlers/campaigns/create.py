@@ -456,30 +456,35 @@ async def select_fba(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     new_campaign = data['new_campaign']
     new_campaign['fulfilled_by_amazon'] = fba_status
+    # Auto-set sales rank cutoff (simplified system - no user selection)
+    new_campaign['max_sales_rank'] = 10000
     await state.update_data(new_campaign=new_campaign)
 
-    await state.set_state(CampaignStates.campaign_new_select_sales_rank)
+    # Skip sales rank selection - go directly to posting frequency
+    await state.set_state(CampaignStates.campaign_new_select_posting_frequency)
 
-    # Sales rank quality options (1-6 buttons)
-    sales_rank_options = [
-        ("🏆 Ранг 1: 1-500 (Элитные топ товары)", "500"),
-        ("🥈 Ранг 2: 501-1000 (Очень популярные)", "1000"),
-        ("🥉 Ранг 3: 1001-3000 (Популярные)", "3000"),
-        ("⭐ Ранг 4: 3001-5000 (Хорошие)", "5000"),
-        ("📈 Ранг 5: 5001-10000 (Расширенный выбор)", "10000"),
-        ("🔍 Ранг 6: 10000+ (Для непопулярных категорий)", "100000")
+    # Posting frequency options (posts per hour)
+    frequency_options = [
+        ("🐌 0.5 постов/час (очень редко)", "0.5"),
+        ("🐢 1 пост/час", "1"),
+        ("🚶 2 поста/час", "2"),
+        ("🏃 3 поста/час", "3"),
+        ("🚀 4 поста/час (активно)", "4"),
+        ("⚡ 6 постов/час (очень активно)", "6"),
+        ("🔥 12 постов/час (максимум)", "12")
     ]
 
     await callback.message.edit_text(
-        "<b>🎯 ШАГ 8: Качество товаров - Sales Rank</b>\n\n"
-        "⭐ <b>Выберите уровень качества товаров:</b>\n\n"
-        "Чем меньше число Sales Rank, тем лучше продаются товары на Amazon.\n"
-        "Рекомендуем Ранг 3 или 4 для оптимального баланса качества и выбора.",
+        "<b>ШАГ 8: Частота постинга</b>\n\n"
+        "<b>Как часто публиковать товары?</b>\n\n"
+        "Чем выше частота, тем активнее будет кампания.\n"
+        "Рекомендуем 2-4 поста в час для оптимальной видимости.\n\n"
+        "Выберите желаемую частоту постинга:",
         parse_mode="HTML",
         reply_markup=get_multiselect_keyboard(
-            options=sales_rank_options,
+            options=frequency_options,
             selected_values=[],
-            done_callback="campaign_done_sales_rank",
+            done_callback="campaign_done_posting_frequency",
             back_callback="campaign_done_fba"  # Go back to FBA selection
         )
     )
@@ -537,7 +542,7 @@ async def done_select_sales_rank(callback: CallbackQuery, state: FSMContext):
             options=frequency_options,
             selected_values=[],
             done_callback="campaign_done_posting_frequency",
-            back_callback="campaign_new_select_sales_rank"  # Go back to sales rank
+            back_callback="campaign_done_fba"  # Go back to FBA selection (sales rank skipped)
         )
     )
     await callback.answer()
@@ -868,7 +873,7 @@ async def toggle_selection(callback: CallbackQuery, state: FSMContext):
                 options=frequency_options,
                 selected_values=selected_list,
                 done_callback="campaign_done_posting_frequency",
-                back_callback="campaign_new_select_sales_rank"
+                back_callback="campaign_done_fba"  # Go back to FBA selection (sales rank skipped)
             )
         )
         await callback.answer()
@@ -1277,21 +1282,19 @@ async def go_back_to_frequency(callback: CallbackQuery, state: FSMContext):
         ("⚡ 6 постов/час (очень активно)", "6"),
         ("🔥 12 постов/час (максимум)", "12")
     ]
-    
-    max_sales_rank = new_campaign.get('max_sales_rank', 2000)
-    selected_description = f"Ранг: {max_sales_rank}"
 
     await callback.message.edit_text(
-        f"<b>ШАГ 9: Частота постинга</b>\n\n"
-        f"Текущий уровень качества: <b>{selected_description}</b>\n\n"
+        "<b>ШАГ 8: Частота постинга</b>\n\n"
         "<b>Как часто публиковать товары?</b>\n\n"
+        "Чем выше частота, тем активнее будет кампания.\n"
+        "Рекомендуем 2-4 поста в час для оптимальной видимости.\n\n"
         "Выберите желаемую частоту постинга:",
         parse_mode="HTML",
         reply_markup=get_multiselect_keyboard(
             options=frequency_options,
             selected_values=selected_list,
             done_callback="campaign_done_posting_frequency",
-            back_callback="campaign_new_select_sales_rank"
+            back_callback="campaign_done_fba"  # Go back to FBA selection (sales rank skipped)
         )
     )
     await callback.answer()
