@@ -450,6 +450,9 @@ async def timing_input_end(message: Message, state: FSMContext):
             await message.answer("❌ Время окончания должно быть позже времени начала. Попробуйте снова:")
             return
 
+        # ИСПРАВЛЕНИЕ: Удаляем старые тайминги перед сохранением новых
+        await campaign_mgr.clear_timings(campaign_id)
+
         # Save timing for each selected day
         for day_index_str in selected_days_indices:
             await campaign_mgr.save_timing(

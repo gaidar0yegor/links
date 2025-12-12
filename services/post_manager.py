@@ -8,7 +8,45 @@ from io import BytesIO
 from services.sheets_api import sheets_api
 from services.amazon_paapi_client import amazon_paapi_client
 from services.llm_client import OpenAIClient
-from typing import Optional
+from typing import Optional, Dict, Any
+
+
+def format_error_product_details(product_data: Dict[str, Any], campaign_name: str, error_reason: str) -> str:
+    """
+    Форматирует детали товара для уведомления об ошибке генерации контента.
+    """
+    # Извлекаем данные товара (поддержка разных форматов ключей)
+    asin = product_data.get('asin') or product_data.get('ASIN', 'N/A')
+    title = product_data.get('title') or product_data.get('Title', 'Без названия')
+    price = product_data.get('price') or product_data.get('Price')
+    rating = product_data.get('rating') or product_data.get('Rating')
+    review_count = product_data.get('review_count') or product_data.get('ReviewsCount')
+    affiliate_link = product_data.get('affiliate_link') or product_data.get('AffiliateLink', '')
+    
+    # Форматируем цену
+    price_str = f"{price:.2f} €" if price else "N/A"
+    
+    # Форматируем рейтинг
+    rating_str = f"{rating}/5" if rating else "N/A"
+    reviews_str = f"({review_count} отзывов)" if review_count else ""
+    
+    # Обрезаем название если слишком длинное
+    title_display = title[:60] + "..." if len(title) > 60 else title
+    
+    # Формируем сообщение
+    message = (
+        f"⚠️ Проблема с генерацией контента\n\n"
+        f"📦 Товар: {title_display}\n"
+        f"🔖 ASIN: {asin}\n"
+        f"💰 Цена: {price_str}\n"
+        f"⭐ Рейтинг: {rating_str} {reviews_str}\n"
+        f"📋 Кампания: {campaign_name}\n\n"
+        f"❌ Причина: {error_reason}\n"
+        f"⏭️ Действие: Товар пропущен\n\n"
+        f"🔗 Ссылка: {affiliate_link[:50]}..." if affiliate_link else ""
+    )
+    
+    return message.strip()
 
 
 def replace_affiliate_tag(url: str, new_tag: str) -> str:
@@ -449,20 +487,25 @@ class PostManager:
                 }
 
             if not content_result:
-                error_msg = f"Генерация контента не удалась (LLM Error), пропускаем пост для кампании {campaign['name']}"
-                print(f"⚠️  {error_msg}")
-                # Notify user about the failure instead of posting bad content
-                await self._notify_user(f"🚨 Пропущен пост: Ошибка генерации текста (проверьте OpenAI API).", user_id=user_id)
+                print(f"⚠️ Генерация контента не удалась (LLM Error), пропускаем пост для кампании {campaign['name']}")
+                # Notify user with detailed product info
+                error_details = format_error_product_details(
+                    product_data, 
+                    campaign['name'], 
+                    "OpenAI API не вернул ответ (возможно timeout или rate limit)"
+                )
+                await self._notify_user(error_details, user_id=user_id)
                 return
 
-                # FALLBACK REMOVED as per user request to avoid low-quality posts
-                # Enhanced fallback content with available product data
-                # ... (fallback code removed) ...
-
         except Exception as e:
-            error_msg = f"Генерация контента для кампании {campaign['name']} не удалась: {str(e)}"
-            print(f"❌ {error_msg}")
-            await self._notify_user(f"🚨 Ошибка: {error_msg}", user_id=user_id)
+            print(f"❌ Генерация контента для кампании {campaign['name']} не удалась: {str(e)}")
+            # Notify user with detailed product info and exception
+            error_details = format_error_product_details(
+                product_data, 
+                campaign['name'], 
+                str(e)
+            )
+            await self._notify_user(error_details, user_id=user_id)
             return
 
         # Get base affiliate link and UTM marks
@@ -592,10 +635,13 @@ class PostManager:
         except Exception as e:
             print(f"⚠️  Statistics logging failed: {e}")
 
-    async def post_queued_product(self, campaign: dict, product_data: dict):
+    async def post_queued_product(self, campaign: dict, product_data: dict) -> bool:
         """
         Post a pre-fetched product from the queue without API calls.
         Used by the product queue system for faster, more reliable posting.
+        
+        Returns:
+            bool: True if post was successful, False if failed (LLM error, etc.)
         """
         print(f"📦 Posting queued product: {product_data.get('asin', 'Unknown')} - {product_data.get('Title', 'Unknown')[:50]}...")
 
@@ -605,7 +651,7 @@ class PostManager:
 
         if not (has_price and has_title):
             print(f"⚠️  Skipping queued product {product_data.get('asin')} - missing essential data: Price: {has_price}, Title: {bool(has_title)}")
-            return
+            return False  # Пропускаем товар
 
         print(f"✅ Quality check passed for queued product {product_data.get('asin')}")
 
@@ -615,7 +661,7 @@ class PostManager:
             from services.sheets_api import sheets_api
         except ImportError as e:
             print(f"⚠️  Enhanced services not available for queued product posting")
-            return
+            return False
 
         campaign_id = campaign.get('id')
         params = campaign.get('params', {})
@@ -656,19 +702,26 @@ class PostManager:
                 }
 
             if not content_result:
-                error_msg = f"Генерация контента не удалась (LLM Error), пропускаем пост для очереди кампании {campaign['name']}"
-                print(f"⚠️  {error_msg}")
-                await self._notify_user(f"🚨 Пропущен пост из очереди: Ошибка генерации текста.", user_id=user_id)
-                return
-
-                # FALLBACK REMOVED for queued products too
-                # ... (fallback code removed) ...
+                print(f"⚠️ Генерация контента не удалась (LLM Error), пропускаем пост для очереди кампании {campaign['name']}")
+                # Notify user with detailed product info
+                error_details = format_error_product_details(
+                    formatted_product_data, 
+                    campaign['name'], 
+                    "OpenAI API не вернул ответ (возможно timeout или rate limit)"
+                )
+                await self._notify_user(error_details, user_id=user_id)
+                return False  # Ошибка генерации
 
         except Exception as e:
-            error_msg = f"Генерация контента для продукта из очереди {product_data.get('asin')} не удалась: {str(e)}"
-            print(f"❌ {error_msg}")
-            await self._notify_user(f"🚨 Ошибка: {error_msg}", user_id=user_id)
-            return
+            print(f"❌ Генерация контента для продукта из очереди {product_data.get('asin')} не удалась: {str(e)}")
+            # Notify user with detailed product info and exception
+            error_details = format_error_product_details(
+                formatted_product_data, 
+                campaign['name'], 
+                str(e)
+            )
+            await self._notify_user(error_details, user_id=user_id)
+            return False  # Ошибка генерации
 
         # Get base affiliate link and UTM marks
         base_affiliate_link = content_result.get('product_link') or formatted_product_data.get('affiliate_link', '')
@@ -802,6 +855,9 @@ class PostManager:
 
         except Exception as e:
             print(f"⚠️  Statistics logging failed for queued product: {e}")
+
+        # Возвращаем True если хотя бы один пост был успешным
+        return successful_posts > 0
 
     async def fetch_and_post(self, campaign: dict):
         """Legacy posting method for backward compatibility."""

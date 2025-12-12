@@ -174,6 +174,12 @@ class CampaignManager:
         async with self.db_pool.acquire() as conn:
             await conn.execute(query, campaign_id, day, start_time, end_time)
 
+    async def clear_timings(self, campaign_id: int):
+        """Удаляет все тайминги для кампании перед сохранением новых."""
+        query = "DELETE FROM campaign_timings WHERE campaign_id = $1;"
+        async with self.db_pool.acquire() as conn:
+            await conn.execute(query, campaign_id)
+
     async def get_timings(self, campaign_id: int) -> List[Dict]:
         """Получает все тайминги для кампании."""
         query = "SELECT day_of_week, start_time, end_time FROM campaign_timings WHERE campaign_id = $1 ORDER BY day_of_week, start_time;"
@@ -595,27 +601,43 @@ class CampaignManager:
     async def add_product_to_queue(self, campaign_id: int, product_data: Dict[str, Any]) -> int:
         """
         Add a vetted product to the product queue.
+        Checks for parent_asin duplicates to avoid posting product variations.
         """
-        query = """
-        INSERT INTO product_queue (
-            campaign_id, asin, title, price, currency, rating, review_count,
-            sales_rank, image_urls, affiliate_link, browse_node_ids, quality_score, features
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-        RETURNING id;
-        """
-
+        asin = product_data['asin']
+        parent_asin = product_data.get('parent_asin')
+        
         async with self.db_pool.acquire() as conn:
+            # Check if a variation of this product already exists in queue (by parent_asin)
+            if parent_asin:
+                existing = await conn.fetchrow(
+                    """SELECT asin FROM product_queue 
+                       WHERE campaign_id = $1 AND parent_asin = $2 AND status = 'queued'""",
+                    campaign_id, parent_asin
+                )
+                if existing:
+                    print(f"⏭️ Пропуск {asin} — вариация {existing['asin']} уже в очереди (parent: {parent_asin})")
+                    return -1  # Return -1 to indicate skipped
+            
+            query = """
+            INSERT INTO product_queue (
+                campaign_id, asin, parent_asin, title, price, currency, rating, review_count,
+                sales_rank, image_urls, affiliate_link, browse_node_ids, quality_score, features
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+            RETURNING id;
+            """
+            
             product_id = await conn.fetchval(
                 query,
                 campaign_id,
-                product_data['asin'],
+                asin,
+                parent_asin,
                 product_data.get('title'),
                 product_data.get('price'),
                 product_data.get('currency'),
                 product_data.get('rating'),
                 product_data.get('review_count'),
                 product_data.get('sales_rank'),
-                product_data.get('image_urls', []), # Changed from image_url
+                product_data.get('image_urls', []),
                 product_data.get('affiliate_link'),
                 product_data.get('browse_node_ids', []),
                 product_data.get('sales_rank'),  # Quality score = sales rank
@@ -628,15 +650,18 @@ class CampaignManager:
         Add product to queue with smart displacement.
         If queue is full and new product has better sales rank than the worst product,
         the worst product is removed and the new one is added.
+        Also checks for parent_asin duplicates to avoid product variations.
         
-        Returns: 'added', 'displaced', or 'rejected'
+        Returns: 'added', 'displaced', 'variation_skipped', or 'rejected'
         """
         queue_size = await self.get_queue_size(campaign_id)
         new_rank = product_data.get('sales_rank') or 999999
         asin = product_data.get('asin', 'unknown')
         
         if queue_size < max_queue_size:
-            await self.add_product_to_queue(campaign_id, product_data)
+            result = await self.add_product_to_queue(campaign_id, product_data)
+            if result == -1:
+                return 'variation_skipped'
             print(f"📥 Added {asin} (rank: {new_rank}) - queue: {queue_size + 1}/{max_queue_size}")
             return 'added'
         
@@ -653,7 +678,9 @@ class CampaignManager:
             if worst and (worst['sales_rank'] is None or new_rank < worst['sales_rank']):
                 # New product is better - displace the worst one
                 await conn.execute("DELETE FROM product_queue WHERE id = $1", worst['id'])
-                await self.add_product_to_queue(campaign_id, product_data)
+                result = await self.add_product_to_queue(campaign_id, product_data)
+                if result == -1:
+                    return 'variation_skipped'
                 print(f"🔄 Displaced {worst['asin']} (rank: {worst['sales_rank']}) with {asin} (rank: {new_rank})")
                 return 'displaced'
         
@@ -774,7 +801,7 @@ class CampaignManager:
                 fulfilled_by_amazon=params.get('fulfilled_by_amazon'),
                 max_sales_rank=params.get('max_sales_rank', 10000),
                 min_review_count=campaign.get('min_review_count', 0),
-                max_results=min(limit * 2, 50),
+                max_results=min(limit, 200),
                 items_per_node=items_per_node  # Search multiple pages if needed
             )
 
@@ -796,6 +823,7 @@ class CampaignManager:
                 "duplicate": 0,
                 "low_reviews": 0,
                 "queue_limit": 0,
+                "variation": 0,  # Вариации одного товара (по parent_asin)
                 "error": 0
             }
             
@@ -819,21 +847,27 @@ class CampaignManager:
                 # Prepare product data
                 product_data = {
                     'asin': asin,
+                    'parent_asin': product.get('parent_asin'),  # For filtering variations
                     'title': product.get('title', ''),
                     'price': product.get('price'),
                     'currency': product.get('currency', 'EUR'),
                     'rating': product.get('rating'),
                     'review_count': review_count,
                     'sales_rank': product.get('sales_rank'),
-                    'image_urls': product.get('image_urls', []), # Changed from image_url
+                    'image_urls': product.get('image_urls', []),
                     'affiliate_link': product.get('affiliate_link'),
-                    'browse_node_ids': browse_node_ids
+                    'browse_node_ids': browse_node_ids,
+                    'features': product.get('features', [])  # Features для генерации контента
                 }
 
                 try:
-                    await self.add_product_to_queue(campaign_id, product_data)
-                    queued_count += 1
-                    print(f"✅ Added {asin} to queue (rank: {product.get('sales_rank')}, reviews: {review_count})")
+                    result = await self.add_product_to_queue(campaign_id, product_data)
+                    if result == -1:
+                        # Skipped as variation
+                        skip_stats["variation"] += 1
+                    else:
+                        queued_count += 1
+                        print(f"✅ Added {asin} to queue (rank: {product.get('sales_rank')}, reviews: {review_count})")
                 except Exception as e:
                     skip_stats["error"] += 1
                     print(f"❌ Failed to add {asin} to queue: {e}")
@@ -841,8 +875,8 @@ class CampaignManager:
             # Подробная статистика
             print(f"📊 Статистика наполнения очереди кампании {campaign_id}:")
             print(f"   📥 Получено: {len(search_results)} | ✅ Добавлено: {queued_count}")
-            print(f"   ⏭️ Пропущено: дубликаты={skip_stats['duplicate']}, мало отзывов={skip_stats['low_reviews']}, "
-                  f"лимит очереди={skip_stats['queue_limit']}, ошибки={skip_stats['error']}")
+            print(f"   ⏭️ Пропущено: дубликаты={skip_stats['duplicate']}, вариации={skip_stats['variation']}, "
+                  f"мало отзывов={skip_stats['low_reviews']}, лимит очереди={skip_stats['queue_limit']}, ошибки={skip_stats['error']}")
             
             print(f"🎉 Populated queue for campaign {campaign_id} with {queued_count} products")
             

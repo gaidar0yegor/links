@@ -371,6 +371,8 @@ async def done_select_rating(callback: CallbackQuery, state: FSMContext):
 
     # Кнопки для выбора количества отзывов
     review_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="1 отзыв", callback_data="review_count:1")],
+        [InlineKeyboardButton(text="50 отзывов", callback_data="review_count:50")],
         [InlineKeyboardButton(text="100 отзывов", callback_data="review_count:100")],
         [InlineKeyboardButton(text="250 отзывов", callback_data="review_count:250")],
         [InlineKeyboardButton(text="500 отзывов", callback_data="review_count:500")],
@@ -1146,30 +1148,40 @@ async def finalize_and_save_campaign(callback: CallbackQuery, state: FSMContext)
             await callback.message.edit_text("Пожалуйста, введите другое, уникальное название для новой кампании:")
             return
 
-        campaign_id = await campaign_mgr.save_new_campaign(campaign_data)
+        # 1. КРИТИЧЕСКАЯ ЧАСТЬ - сохранение в БД
+        try:
+            campaign_id = await campaign_mgr.save_new_campaign(campaign_data)
+        except Exception as e:
+            print(f"❌ Ошибка сохранения кампании в БД: {e}")
+            try:
+                await callback.message.answer(f"❌ Ошибка сохранения кампании: {e}")
+            except:
+                pass
+            await state.clear()
+            return
         
-        # Запускаем долгий процесс наполнения очереди в фоновом режиме.
-        # Увеличиваем лимит до 200, чтобы максимально использовать найденные результаты
+        # 2. Запуск фоновой задачи (кампания уже сохранена)
         asyncio.create_task(campaign_mgr.populate_queue_for_campaign(campaign_id, limit=200))
         print(f"🚀 Started background queue population for campaign {campaign_id}")
 
-        # Показываем сообщение о подготовке (через message, не через callback.answer)
-        await callback.message.answer(
-            "⏳ <b>Кампания создана!</b>\n\n"
-            "Идёт сбор товаров (5-10 мин).\n"
-            "Постинг начнётся после завершения подготовки.\n\n",
-            parse_mode="HTML"
-        )
-
-        # Сбрасываем состояние и сразу переходим в меню кампаний.
-        await state.clear()
-        await enter_campaign_module(callback, state, campaign_name=campaign_name)
+        # 3. НЕКРИТИЧЕСКАЯ ЧАСТЬ - уведомления (игнорируем ошибки Telegram)
+        try:
+            await callback.message.answer(
+                "⏳ <b>Кампания создана!</b>\n\n"
+                "Идёт сбор товаров (5-10 мин).\n"
+                "Постинг начнётся после завершения подготовки.\n\n",
+                parse_mode="HTML"
+            )
+            await state.clear()
+            await enter_campaign_module(callback, state, campaign_name=campaign_name)
+        except Exception as e:
+            print(f"⚠️ Telegram communication error (campaign saved OK): {e}")
+            await state.clear()
 
     except Exception as e:
-        print(f"❌ Критическая ошибка при сохранении кампании: {e}")
-        # Используем message.answer вместо callback.answer (который может быть expired)
+        print(f"❌ Ошибка при подготовке данных кампании: {e}")
         try:
-            await callback.message.answer(f"❌ Критическая ошибка при сохранении кампании: {e}")
+            await callback.message.answer(f"❌ Ошибка: {e}")
         except:
             pass
         await state.clear()

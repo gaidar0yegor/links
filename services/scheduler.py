@@ -155,12 +155,18 @@ class CampaignScheduler:
                 }
 
                 # Запуск постинга с продуктом из очереди
-                await self.post_manager.post_queued_product(selected_campaign, product_data_for_post)
+                post_success = await self.post_manager.post_queued_product(selected_campaign, product_data_for_post)
 
-                # Отмечаем продукт как опубликованный
+                # Отмечаем продукт как опубликованный (даже если LLM упал - пропускаем товар)
                 await self.campaign_manager.mark_product_posted(queued_product['id'])
 
-                print(f"✅ Продукт из очереди опубликован: {queued_product['asin']}")
+                if post_success:
+                    print(f"✅ Продукт из очереди опубликован: {queued_product['asin']}")
+                else:
+                    # Пост не удался - НЕ обновляем last_post_time
+                    # Следующий товар будет взят через 1 минуту (следующий цикл)
+                    print(f"⚠️ Пост не удался для {queued_product['asin']} - следующая попытка через 1 мин")
+                    continue  # Пропускаем обновление last_post_time
 
             else:
                 # Queue empty - trigger population

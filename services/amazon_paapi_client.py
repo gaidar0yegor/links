@@ -193,6 +193,7 @@ class AmazonPAAPIClient:
             "BrowseNodeInfo.WebsiteSalesRank",
             "CustomerReviews.Count",
             "CustomerReviews.StarRating",
+            "ParentASIN",  # For filtering product variations
         ]
         
         payload = {
@@ -1066,7 +1067,7 @@ class AmazonPAAPIClient:
                         # Apply filters
                         if min_price:
                             search_request.min_price = int(min_price * 100)  # Convert to cents
-                        
+
                         # Apply rating filter (requires keywords to be set)
                         if min_rating and min_rating > 0:
                             min_rating_int = max(1, min(int(min_rating), 5))  # Clamp 1-5
@@ -1078,7 +1079,7 @@ class AmazonPAAPIClient:
 
                         if response and hasattr(response, 'search_result') and response.search_result:
                             items = getattr(response.search_result, 'items', None) or []
-                            
+
                             if not items:
                                 # No more results, stop searching this node
                                 print(f"📭 Node {node_id} page {page_num}: no results, stopping")
@@ -1095,7 +1096,7 @@ class AmazonPAAPIClient:
                             break
 
                         # Rate limiting between requests
-                        time.sleep(0.8)
+                        await asyncio.sleep(0.8)
 
                     except ApiException as e:
                         print(f"DEBUG: API Exception for node {node_id} page {page_num}: {e.reason}")
@@ -1370,6 +1371,7 @@ class AmazonPAAPIClient:
 
             product_data = {
                 'asin': asin,
+                'parent_asin': item.get('ParentASIN'),  # For filtering variations
                 'title': '',
                 'price': None,
                 'currency': 'EUR',

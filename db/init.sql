@@ -25,6 +25,7 @@ CREATE TABLE product_queue (
     id SERIAL PRIMARY KEY,
     campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
     asin VARCHAR(20) NOT NULL,
+    parent_asin VARCHAR(20), -- Parent ASIN for filtering product variations
     title TEXT,
     price REAL,
     currency VARCHAR(10),
