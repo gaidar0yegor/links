@@ -348,32 +348,29 @@ class CampaignManager:
             limit: Maximum number of ASINs to return
             days: Only check posts from the last N days (default 60). 
                   Products posted more than N days ago can be reposted.
-                  Queued products are always checked regardless of age.
         
         Returns:
             List of ASINs that should not be posted again.
         """
         query = """
-        SELECT asin
-        FROM (
+        SELECT asin FROM (
+            -- Posted products from statistics (last N days)
             SELECT asin FROM statistics_log
             WHERE campaign_id = $1 
               AND asin IS NOT NULL AND asin != ''
               AND post_time > CURRENT_TIMESTAMP - INTERVAL '%s days'
+            
             UNION
+            
+            -- Currently queued products (to avoid adding same product twice)
             SELECT asin FROM product_queue
-            WHERE campaign_id = $1 AND asin IS NOT NULL AND asin != ''
+            WHERE campaign_id = $1 
+              AND status = 'queued'
+              AND asin IS NOT NULL AND asin != ''
         ) AS all_asins
-        GROUP BY asin
-        ORDER BY MAX(
-            COALESCE(
-                (SELECT MAX(post_time) FROM statistics_log WHERE campaign_id = $1 AND asin = all_asins.asin),
-                (SELECT MAX(discovered_at) FROM product_queue WHERE campaign_id = $1 AND asin = all_asins.asin),
-                '1970-01-01'::timestamp
-            )
-        ) DESC
         LIMIT $2;
         """ % days
+        
         async with self.db_pool.acquire() as conn:
             records = await conn.fetch(query, campaign_id, limit)
             return [record['asin'] for record in records]
@@ -731,7 +728,7 @@ class CampaignManager:
             count = await conn.fetchval(query, campaign_id)
             return count or 0
 
-    async def populate_queue_for_campaign(self, campaign_id: int, limit: int = 200, restore_status: str = 'stopped'):
+    async def populate_queue_for_campaign(self, campaign_id: int, limit: int = 200, restore_status: str = 'stopped', notify_user: bool = True):
         """
         Immediately populate the product queue for a campaign.
         
@@ -739,6 +736,7 @@ class CampaignManager:
             campaign_id: ID of the campaign
             limit: Maximum number of products to queue
             restore_status: Status to set after completion ('stopped' for new campaigns, 'running' for active ones)
+            notify_user: Whether to send notification to user (True for new campaigns, False for replenishment)
         """
         try:
             # Mark as 'preparing' to prevent parallel population attempts
@@ -891,8 +889,9 @@ class CampaignManager:
             await self.update_status(campaign_id, final_status)
             print(f"✅ Campaign {campaign_id} status changed to '{final_status}'")
             
-            # Уведомляем пользователя о готовности кампании
-            await self._notify_queue_ready(campaign_id, queued_count)
+            # Уведомляем пользователя о готовности кампании (только для новых кампаний или при ошибке)
+            if notify_user:
+                await self._notify_queue_ready(campaign_id, queued_count)
             
             return queued_count
 
@@ -954,19 +953,40 @@ class CampaignManager:
         except Exception as e:
             print(f"⚠️ Failed to send queue ready notification: {e}")
 
-    async def cleanup_old_products(self, days: int = 30):
+    async def cleanup_old_products(self, queued_days: int = 30, posted_days: int = 7):
         """
-        Remove products that have been in the queue for too long without being posted.
+        Remove old products from queue:
+        - Queued products older than queued_days (not posted)
+        - Posted products older than posted_days (already in statistics_log)
+        
+        Args:
+            queued_days: Days to keep queued products (default 30)
+            posted_days: Days to keep posted products (default 7, just for reference)
         """
-        query = """
-        DELETE FROM product_queue
-        WHERE status = 'queued' AND discovered_at < CURRENT_TIMESTAMP - INTERVAL '%s days';
-        """ % days
-
         async with self.db_pool.acquire() as conn:
-            deleted_count = await conn.fetchval("SELECT COUNT(*) FROM product_queue WHERE status = 'queued' AND discovered_at < CURRENT_TIMESTAMP - INTERVAL '%s days';" % days)
-            await conn.execute(query)
-            return deleted_count or 0
+            # Count before delete
+            queued_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM product_queue WHERE status = 'queued' AND discovered_at < CURRENT_TIMESTAMP - INTERVAL '%s days';" % queued_days
+            )
+            posted_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM product_queue WHERE status = 'posted' AND posted_at < CURRENT_TIMESTAMP - INTERVAL '%s days';" % posted_days
+            )
+            
+            # Delete old queued products
+            await conn.execute(
+                "DELETE FROM product_queue WHERE status = 'queued' AND discovered_at < CURRENT_TIMESTAMP - INTERVAL '%s days';" % queued_days
+            )
+            
+            # Delete old posted products (already logged in statistics_log)
+            await conn.execute(
+                "DELETE FROM product_queue WHERE status = 'posted' AND posted_at < CURRENT_TIMESTAMP - INTERVAL '%s days';" % posted_days
+            )
+            
+            total = (queued_count or 0) + (posted_count or 0)
+            if total > 0:
+                print(f"🧹 Очищено из очереди: {queued_count or 0} старых queued, {posted_count or 0} старых posted")
+            
+            return total
 
     async def cleanup_old_statistics(self, days: int = 90):
         """

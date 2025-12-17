@@ -1045,7 +1045,7 @@ class AmazonPAAPIClient:
                             page_num = page_offset + 1  # Sequential: 1, 2, 3
                         else:
                             page_num = random.randint(1, 5)  # Random for single page
-
+                    
                         # Create search request with Keywords='*' to enable rating filter
                         search_request = SearchItemsRequest(
                             partner_tag=self.associate_tag,

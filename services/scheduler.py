@@ -181,9 +181,10 @@ class CampaignScheduler:
                 try:
                     # Run queue population as background task (don't block posting cycle)
                     # restore_status='running' to keep campaign active after population
+                    # notify_user=False to avoid spamming user with replenishment notifications
                     asyncio.create_task(
                         self.campaign_manager.populate_queue_for_campaign(
-                            selected_campaign['id'], limit=200, restore_status='running'
+                            selected_campaign['id'], limit=200, restore_status='running', notify_user=False
                         )
                     )
                     print(f"🔄 Запущено фоновое наполнение очереди для '{selected_campaign['name']}'. Пост будет в следующем цикле.")
@@ -377,11 +378,10 @@ class CampaignScheduler:
                 print(f"❌ Ошибка поиска для кампании '{campaign_name}': {e}")
                 continue
 
-        # Очистка старых продуктов (старше 30 дней)
+        # Очистка старых продуктов: queued > 30 дней, posted > 7 дней
         try:
-            cleaned_count = await self.campaign_manager.cleanup_old_products(days=30)
-            if cleaned_count > 0:
-                print(f"🧹 Очищено {cleaned_count} старых продуктов из очереди")
+            cleaned_count = await self.campaign_manager.cleanup_old_products(queued_days=30, posted_days=7)
+            # Лог уже выводится внутри функции
         except Exception as e:
             print(f"❌ Ошибка очистки очереди: {e}")
 
