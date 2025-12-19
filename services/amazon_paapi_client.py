@@ -176,6 +176,8 @@ class AmazonPAAPIClient:
             return []
         
         # OffersV2 resources (validated as working)
+        # Note: We only request V2 resources, but Amazon may return V1 format in response
+        # We handle both formats in parsing code
         offersv2_resources = [
             "OffersV2.Listings.Price",
             "OffersV2.Listings.Availability",
@@ -1046,6 +1048,11 @@ class AmazonPAAPIClient:
                         else:
                             page_num = random.randint(1, 5)  # Random for single page
                     
+                        # Build delivery flags for FBA filter
+                        delivery_flags = []
+                        if fulfilled_by_amazon:
+                            delivery_flags.append(DeliveryFlag.FULFILLEDBYAMAZON)
+                        
                         # Create search request with Keywords='*' to enable rating filter
                         search_request = SearchItemsRequest(
                             partner_tag=self.associate_tag,
@@ -1057,6 +1064,7 @@ class AmazonPAAPIClient:
                             item_page=page_num,
                             item_count=10,  # Max per page
                             sort_by="Featured",
+                            delivery_flags=delivery_flags if delivery_flags else None,
                             resources=[
                                 SearchItemsResource.ITEMINFO_TITLE,
                                 SearchItemsResource.OFFERS_LISTINGS_PRICE,
@@ -1072,7 +1080,9 @@ class AmazonPAAPIClient:
                         if min_rating and min_rating > 0:
                             min_rating_int = max(1, min(int(min_rating), 5))  # Clamp 1-5
                             search_request.min_reviews_rating = min_rating_int
-                            print(f"  🌟 Rating filter applied: min {min_rating_int} stars")
+                            if page_num == 1:  # Only log once per node
+                                fba_str = "FBA only" if fulfilled_by_amazon else "all sellers"
+                                print(f"  🌟 Filters: min {min_rating_int}⭐, {fba_str}")
 
                         # Execute search
                         response = self.api_client.search_items(search_request)
@@ -1129,11 +1139,21 @@ class AmazonPAAPIClient:
                 "accepted": 0,
                 "skipped_rating": 0,
                 "skipped_rank": 0,
+                "skipped_stock": 0,
                 "skipped_other": 0
             }
             
             for product in enriched_products:
                 asin = product.get('asin', 'N/A')
+                
+                # Apply stock filter - only accept items that are in stock
+                # Raw HTTP API returns "IN_STOCK", SDK .to_dict() may return "Now" or other formats
+                availability_type = product.get('availability_type')
+                # Accept both "IN_STOCK" (raw API) and "Now" (SDK converted format)
+                if availability_type not in ('IN_STOCK', 'Now', 'now', 'in_stock'):
+                    # print(f"DEBUG: Skipping {asin} - out of stock (availability: {availability_type})")
+                    stats["skipped_stock"] += 1
+                    continue
 
                 # Apply rating filter
                 rating = product.get('rating')
@@ -1170,7 +1190,8 @@ class AmazonPAAPIClient:
             
             # Log summary instead of individual skips
             print(f"DEBUG: Filtering Summary: Total={stats['total']}, Accepted={stats['accepted']}, "
-                  f"Skipped[Rating]={stats['skipped_rating']}, Skipped[Rank]={stats['skipped_rank']}")
+                  f"Skipped[Stock]={stats['skipped_stock']}, Skipped[Rating]={stats['skipped_rating']}, "
+                  f"Skipped[Rank]={stats['skipped_rank']}")
 
             print(f"DEBUG: Returning {len(filtered_products)} enriched and filtered products")
             return filtered_products
@@ -1384,6 +1405,7 @@ class AmazonPAAPIClient:
                 'description': '',
                 'is_buy_box_winner': None,
                 'merchant_name': None,
+                'availability_type': None,  # "Now" = in stock
             }
 
             # Extract title
@@ -1406,6 +1428,10 @@ class AmazonPAAPIClient:
                 # Buy Box Winner (V2 exclusive)
                 product_data['is_buy_box_winner'] = listing.get('IsBuyBoxWinner')
                 
+                # Availability (V2 exclusive) - Raw API returns "IN_STOCK" for available items
+                availability = listing.get('Availability', {})
+                product_data['availability_type'] = availability.get('Type')
+                
                 # Merchant Info (V2 exclusive)
                 merchant_info = listing.get('MerchantInfo', {})
                 product_data['merchant_name'] = merchant_info.get('Name')
@@ -1418,14 +1444,30 @@ class AmazonPAAPIClient:
                     product_data['currency'] = money.get('Currency', 'EUR')
 
             # Fallback to V1 Offers if V2 not present
-            if product_data['price'] is None:
-                offers_v1 = item.get('Offers', {})
-                listings_v1 = offers_v1.get('Listings', [])
+            # Amazon may return V1 format (lowercase "offers") even when requesting V2 resources
+            if product_data['price'] is None or product_data['availability_type'] is None:
+                # Try both uppercase and lowercase (Amazon API may return either)
+                offers_v1 = item.get('Offers', {}) or item.get('offers', {})
+                listings_v1 = offers_v1.get('Listings', []) or offers_v1.get('listings', [])
                 if listings_v1:
-                    price_obj = listings_v1[0].get('Price', {})
-                    if price_obj.get('Amount') is not None:
-                        product_data['price'] = float(price_obj['Amount'])
-                        product_data['currency'] = price_obj.get('Currency', 'EUR')
+                    listing_v1 = listings_v1[0]
+                    
+                    # Price fallback (V1 structure: Price.Amount, not Price.Money.Amount)
+                    if product_data['price'] is None:
+                        price_obj = listing_v1.get('Price', {}) or listing_v1.get('price', {})
+                        # V1 can have Amount directly or nested
+                        if price_obj.get('Amount') is not None:
+                            product_data['price'] = float(price_obj['Amount'])
+                            product_data['currency'] = price_obj.get('Currency', price_obj.get('currency', 'EUR'))
+                    
+                    # Availability fallback
+                    if product_data['availability_type'] is None:
+                        availability_v1 = listing_v1.get('Availability', {}) or listing_v1.get('availability', {})
+                        product_data['availability_type'] = availability_v1.get('Type') or availability_v1.get('type')
+                    
+                    # BuyBox fallback
+                    if product_data['is_buy_box_winner'] is None:
+                        product_data['is_buy_box_winner'] = listing_v1.get('IsBuyBoxWinner') or listing_v1.get('is_buy_box_winner')
 
             # Extract rating and review count
             customer_reviews = item.get('CustomerReviews', {})
