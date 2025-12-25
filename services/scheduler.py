@@ -90,7 +90,11 @@ class CampaignScheduler:
             return
 
         # 3. Запускаем все подходящие кампании (с учетом частоты постинга)
-        for selected_campaign in campaigns_to_run:
+        for idx, selected_campaign in enumerate(campaigns_to_run):
+            # Добавляем задержку между кампаниями для снижения нагрузки на OpenAI API
+            if idx > 0:
+                await asyncio.sleep(2)  # 2 секунды между запросами от разных кампаний
+            
             # Проверяем частоту постинга (posting frequency)
             posting_frequency = selected_campaign.get('posting_frequency', 0)  # posts per hour
             last_post_time = selected_campaign.get('last_post_time')
